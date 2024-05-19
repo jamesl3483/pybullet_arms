@@ -1,0 +1,5 @@
+numpy~=1.19.5
+pybullet~=3.2.6
+transforms3d~=0.4.1
+setuptools~=59.6.0
+pynput~=1.7.7
