@@ -5,7 +5,8 @@ import numpy as np
 import pybullet as pb
 from pybullet_utils.bullet_client import BulletClient
 from pynput import keyboard
-from pynput.keyboard import Key
+import threading
+import time
 
 from ..hand_body import HandBody
 from ..hand_model import HandModel20, HandModel45
@@ -64,21 +65,42 @@ def main(args):
     client.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
 
     slider_ids = []
-
+    step = 0.1  # Step size for position adjustments
     position = [0.0, 0.0, 0.0] #X,Y,Z
 
-    # def update_position(key):
-    #     step = 0.5
-    #     if key == Key.up:
-    #         position[1] += step
-    #     if key == Key.down:
-    #         position[1] -= step
-    #     if key == key.left:
-    #         position[0] += step
-    #     if key == key.right:
-    #         position[0] -= step
+    # Define a function to continuously check keyboard state
+    def monitor_keyboard():
+        with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+            listener.join()
 
+    # Dictionary to hold the state of each key
+    key_state = {'up': False, 'down': False, 'left': False, 'right': False}
 
+    def on_press(key):
+        if key == keyboard.Key.up:
+            key_state['up'] = True
+        elif key == keyboard.Key.down:
+            key_state['down'] = True
+        elif key == keyboard.Key.left:
+            key_state['left'] = True
+        elif key == keyboard.Key.right:
+            key_state['right'] = True
+
+    def on_release(key):
+        if key == keyboard.Key.up:
+            key_state['up'] = False
+        elif key == keyboard.Key.down:
+            key_state['down'] = False
+        elif key == keyboard.Key.left:
+            key_state['left'] = False
+        elif key == keyboard.Key.right:
+            key_state['right'] = False
+        elif key == keyboard.Key.esc:
+            return False  # Stop listener
+
+    # Start the keyboard monitoring in a separate thread
+    thread = threading.Thread(target=monitor_keyboard)
+    thread.start()
 
     for coord in ('X', 'Y', 'Z'):
         uid = client.addUserDebugParameter(f'base_{coord}', -0.5, 0.5, 0)
@@ -97,25 +119,27 @@ def main(args):
     try:
         while client.isConnected():
             values = [client.readUserDebugParameter(uid) for uid in slider_ids]
-            position = [0.0, 0.0, 0.0]  # X,Y,Z
-            step = 0.1
-            with keyboard.Events() as events:
-                for event in events:
-                    if isinstance(event, keyboard.Events.Press):
-                        if event.key == Key.up:
-                            position[1] += step
+            # Update position based on key states
+            if key_state['up']:
+                position[1] += step
+            if key_state['down']:
+                position[1] -= step
+            if key_state['left']:
+                position[0] -= step
+            if key_state['right']:
+                position[0] += step
 
-                        if event.key == Key.down:
-                            position[1] -= step
-                        if event.key == Key.left:
-                            position[0] += step
-                        if event.key == Key.right:
-                            position[0] -= step
+            # Assume the getQuaternionFromEuler function and values are handled correctly
+            rotation = client.getQuaternionFromEuler(values[3:6])
+            angles = values[6:]
 
-                    rotation = client.getQuaternionFromEuler(values[3:6])
-                    angles = values[6:]
+            # Update the hand's target position and rotation
+            hand.set_target(position, rotation, angles)
 
-                    hand.set_target(position, rotation, angles)
+            # Small delay to prevent updating too quickly
+            time.sleep(0.1)
+
+
     except pb.error as err:
         if str(err) not in ['Not connected to physics server.', 'Failed to read parameter.']:
             raise
