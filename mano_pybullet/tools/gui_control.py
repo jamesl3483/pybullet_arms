@@ -29,7 +29,7 @@ parser.add_argument('--self-collisions', dest='self_collisions', action='store_t
                     help='Enable self collisions')
 parser.add_argument('--no-self-collisions', dest='self_collisions', action='store_false',
                     help='Disable self collisions')
-parser.set_defaults(self_collisions=True)
+parser.set_defaults(self_collisions=False)
 
 
 def main(args):
