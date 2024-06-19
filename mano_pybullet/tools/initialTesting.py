@@ -227,15 +227,81 @@ def main(args):
                 # angles[17] = 0.7
                 finger_middle = 0.15
                 finger_tip = 0.25
-                angles = [0,finger_base, finger_middle, finger_tip] * 4 + [1.5, 0.7, finger_middle, finger_tip]
-                left_hand.set_target(left_position, left_rotation, angles)
+                target_angles = [0,finger_base, finger_middle, finger_tip] * 4 + [1.5, 0.7, finger_middle, finger_tip]
+                left_hand.set_target(left_position, left_rotation, target_angles)
+                prev_angle = left_hand.get_state()[2]
                 time.sleep(0.1)
+
                 #if hand is not at target, keep it in the while loop
-                #check if the previous state is nearly the same as the current state
-                #if it is, then stop that angle from moving
+                while True:
+                    all_angles_stable = True
+                    for i, angle in enumerate(left_hand.get_state()[2]):
+                        if abs(angle - target_angles[i]) > 0.01:
+                            # check if the previous state is nearly the same as the current state
+                            if abs(prev_angle[i] - angle) < 0.01:
+                                #if nearly the same, target angle is changed and target is reset
+                                target_angles[i] = angle
+                                left_hand.set_target(left_position, left_rotation, target_angles)
+                            #make the previous angle the current angle and keep going
+                            prev_angle[i] = angle
+                            all_angles_stable = False
+                    if all_angles_stable:
+                        break
+
+                    time.sleep(0.05)
+
+
                 #Generally move the finger base first then move up to the tip
 
+                #TODO:Start of the chatGPT portion, review immediately
+                # Flags to control the sequence of movement
+                base_moving = True
+                middle_moving = False
+                tip_moving = False
 
+                while True:
+                    all_angles_stable = True
+                    current_angles = left_hand.get_state()[0][2]
+
+                    for i in range(len(target_angles)):
+                        angle = current_angles[i]
+                        # Check if the base is still moving
+                        if base_moving and i % 4 == 1:  # Assuming index 1 is base for each finger
+                            if abs(angle - prev_angle[i]) > 0.01:
+                                all_angles_stable = False
+                                prev_angle[i] = angle
+                            else:
+                                # Base stopped moving, activate middle
+                                base_moving = False
+                                middle_moving = True
+                                target_angles[i + 1] = finger_middle  # Set middle finger target
+
+                        elif middle_moving and i % 4 == 2:  # Assuming index 2 is middle for each finger
+                            if abs(angle - prev_angle[i]) > 0.01:
+                                all_angles_stable = False
+                                prev_angle[i] = angle
+                            else:
+                                # Middle stopped moving, activate tip
+                                middle_moving = False
+                                tip_moving = True
+                                target_angles[i + 1] = finger_tip  # Set tip finger target
+
+                        elif tip_moving and i % 4 == 3:  # Assuming index 3 is tip for each finger
+                            if abs(angle - prev_angle[i]) > 0.01:
+                                all_angles_stable = False
+                                prev_angle[i] = angle
+
+                    if all_angles_stable:
+                        break
+
+                    # Update target for the hand with potentially new targets
+                    left_hand.set_target(left_position, left_rotation, target_angles)
+
+                    # Wait a little before next iteration
+                    time.sleep(0.05)
+
+                # Final stabilization delay
+                time.sleep(0.05)
                 #We can detect if the object is there if the fingers do not move enough since collision will stop
                 #the finger from moving to the target
                 #hand.get_state[0] : tuple of position
