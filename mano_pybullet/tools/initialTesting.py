@@ -81,11 +81,7 @@ def main(args):
     right_hand.set_target(right_position, right_rotation)
     client.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
 
-    index = 0.0
-    middle = 0.0
-    pinky = 0.0
-    ring = 0.0
-    thumb = 0.0
+
 
     step = 0.1  # Step size for position adjustments
 
@@ -98,7 +94,8 @@ def main(args):
     key_state = {
         'up': False, 'down': False, 'left': False, 'right': False,
         'w': False, 'a': False, 's': False, 'd': False,
-        '1': False, '2': False, '3': False, '4': False, '5': False
+        '1': False, '2': False, '3': False, '4': False, '5': False,
+        'cylinder_grab': False, 'top_grab': False
     }
 
     def on_press(key):
@@ -111,6 +108,10 @@ def main(args):
                 key_state['left'] = True
             elif key == keyboard.Key.right:
                 key_state['right'] = True
+            elif key.char == 'e':
+                key_state['cylinder_grab'] = True
+            elif key.char == 'r':
+                key_state['top_grab'] = True
             elif key.char == 'w':
                 key_state['w'] = True
             elif key.char == 'a':
@@ -129,6 +130,7 @@ def main(args):
                 key_state['4'] = True
             elif key.char == '5':
                 key_state['5'] = True
+
         except AttributeError:
             pass
 
@@ -142,6 +144,10 @@ def main(args):
                 key_state['left'] = False
             elif key == keyboard.Key.right:
                 key_state['right'] = False
+            elif key.char == 'e':
+                key_state['cylinder_grab'] = False
+            elif key.char == 'r':
+                key_state['top_grab'] = False
             elif key.char == 'w':
                 key_state['w'] = False
             elif key.char == 'a':
@@ -170,34 +176,27 @@ def main(args):
     thread = threading.Thread(target=monitor_keyboard)
     thread.start()
 
-    # for coord in ('X', 'Y', 'Z'):
-    #     uid = client.addUserDebugParameter(f'base_{coord}', -0.5, 0.5, 0)
-    #     slider_ids.append(uid)
-    # for coord in ('R', 'P', 'Y'):
-    #     uid = client.addUserDebugParameter(f'base_{coord}', -3.14, 3.14, 0)
-    #     slider_ids.append(uid)
+    #######For individual finger contraction#####
+    index = 0.0
+    middle = 0.0
+    pinky = 0.0
+    ring = 0.0
+    thumb = 0.0
+    ################################################
 
-    #For the individual joints
-    # left_joints = []
-    # for i, joint in enumerate(left_hand_model.joints):
-    #     left_name = left_hand_model.link_names[i]
-    #     #print(left_name)
-    #     for axis, (lower, upper) in zip(joint.axes, joint.limits):
-    #         #print(f'{left_name}[{axis}]', lower, upper, 0)
-    #         uid = client.addUserDebugParameter(f'{left_name}[{axis}]', lower, upper, 0)
-    #         #print(uid)
-    #         left_joints.append(uid)
+    #####For general finger grabbing######
+    finger_base = 0.0
+    finger_middle = 0.0
+    finger_tip = 0.0
+    ######################################
 
-    # for i, joint in enumerate(right_hand_model.joints):
-    #     right_name = right_hand_model.link_names[i]
-    #     for axis, (lower, upper) in zip(joint.axes, joint.limits):
-    #         uid = client.addUserDebugParameter(f'{right_name}[{axis}]', lower, upper, 0)
-    #         slider_ids.append(uid)
+    angles = [0.0] * 20
 
     try:
         while client.isConnected():
             #values = [client.readUserDebugParameter(uid) for uid in slider_ids]
             # Update position based on key states
+            #right hand position
             if key_state['up']:
                 right_position[1] += step
             if key_state['down']:
@@ -207,6 +206,7 @@ def main(args):
             if key_state['right']:
                 right_position[0] += step
 
+            #left hand position
             if key_state['w']:
                 left_position[1] += step
             if key_state['s']:
@@ -216,8 +216,36 @@ def main(args):
             if key_state['d']:
                 left_position[0] += step
 
+
+            #holding the cup
+            if key_state['cylinder_grab']:
+
+
+                #Move the thumb in the y axis correct position
+                # create a slight cupping shape before contracting the base of the fingers
+                # angles[16] = 1.5
+                # angles[17] = 0.7
+                finger_middle = 0.15
+                finger_tip = 0.25
+                angles = [0,finger_base, finger_middle, finger_tip] * 4 + [1.5, 0.7, finger_middle, finger_tip]
+                left_hand.set_target(left_position, left_rotation, angles)
+                time.sleep(0.1)
+                #if hand is not at target, keep it in the while loop
+                #check if the previous state is nearly the same as the current state
+                #if it is, then stop that angle from moving
+                #Generally move the finger base first then move up to the tip
+
+
+                #We can detect if the object is there if the fingers do not move enough since collision will stop
+                #the finger from moving to the target
+                #hand.get_state[0] : tuple of position
+                #hand.get_state[1]: tuple of rotation
+                #hand.get_state[2]: tuple of finger angles
+                #Thumb state
+
+
+            #moving individual fingers
             if key_state['1']:
-                print("hi")
                 index += step * 5
             elif index > 0:
                 index -= step * 5
@@ -244,7 +272,7 @@ def main(args):
             #angles = values[6:]
             angles = [0] + [index] * 3 + [0] + [middle] * 3 + [0] + [pinky] * 3 + [0] + [
                 ring] * 3 + [0] + [thumb] * 3
-            #TODO: Update the joint angles based on the the input
+
 
             # Update the hand's target position and rotation
             left_hand.set_target(left_position, left_rotation, angles)
@@ -257,6 +285,10 @@ def main(args):
     except pb.error as err:
         if str(err) not in ['Not connected to physics server.', 'Failed to read parameter.']:
             raise
+
+#Check if the hand is being obstructed by something and will let the system know to quit moving in that direction
+def is_stuck(hand):
+
 
 
 if __name__ == '__main__':
