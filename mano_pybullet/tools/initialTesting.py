@@ -292,7 +292,7 @@ def main(args):
                             elif i % 4 == 2:  # Middle segment
                                 next_index = i + 1
                                 if next_index < len(target_angles):  # Check bounds
-                                    if_moving[next_index] = Truegitt
+                                    if_moving[next_index] = True
                                     target_angles[next_index] = finger_tip
                                     print("Activating tip segment at index", next_index)
 
