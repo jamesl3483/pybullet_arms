@@ -8,7 +8,7 @@ __all__ = ('HandPushEnv')
 class HandPushEnv(HandObjectEnv):
     """Push an object environment class."""
 
-    def __init__(self, target_distance=0.2, **kwargs):
+    def __init__(self, target_distance=1.0, **kwargs):
         """Constructor of a HandObjectEnv.
 
         Keyword Arguments:

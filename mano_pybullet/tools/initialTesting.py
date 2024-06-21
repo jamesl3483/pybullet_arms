@@ -3,6 +3,7 @@
 import argparse
 import numpy as np
 import pybullet as pb
+import pybullet_data
 from pybullet_utils.bullet_client import BulletClient
 from pynput import keyboard
 import threading
@@ -68,7 +69,7 @@ def main(args):
     client.setRealTimeSimulation(True)
     #load left hand
     left_hand = HandBody(client, left_hand_model, flags=flags)
-    left_position = [-0.1, 0.0, 0.0]  # X,Y,Z
+    left_position = [-0.3, 0.0, 0.2]  # X,Y,Z
     left_rotation = [0.0, 0.0, 1.0, 1.0]  # Quaternion
     left_hand.set_target(left_position, left_rotation)
     #pause to let the hand load into position
@@ -76,12 +77,38 @@ def main(args):
     #load right hand
 
     right_hand = HandBody(client, right_hand_model, flags=flags)
-    right_position = [.1, 0.0, 0.0]  # X,Y,Z
+    right_position = [.3, 0.0, 0.2]  # X,Y,Z
     right_rotation = [0.0, 0.0, -1.0, 1.0]  # Quaternion
     right_hand.set_target(right_position, right_rotation)
     client.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
-
+    time.sleep(.2)
     step = 0.1  # Step size for position adjustments
+
+    client.setAdditionalSearchPath(pybullet_data.getDataPath())
+    planeId = client.loadURDF("plane.urdf")
+
+    # Cylinder parameters
+    cylinder_radius = 0.1
+    cylinder_height = 0.25
+    cylinder_mass = 10  # mass in kg
+
+    # Create a cylinder
+    # orientation is provided as a quaternion, here it's the identity quaternion for no rotation
+    cylinder_orientation = client.getQuaternionFromEuler([0, 0, 0])
+    cylinder_id = client.createCollisionShape(client.GEOM_CYLINDER, radius=cylinder_radius, height=cylinder_height)
+    cylinder_visual_id = client.createVisualShape(client.GEOM_CYLINDER, radius=cylinder_radius,
+                                             halfExtents=[0, cylinder_height / 2, 0], rgbaColor=[1, 0, 0, 1])
+    cylinder_position = [0, 0, cylinder_height / 2]  # x, y, z coordinates to place it half above the ground
+
+    # Create a multi-body from the collision and visual shapes
+    cylinder_body = client.createMultiBody(baseMass=cylinder_mass, baseCollisionShapeIndex=cylinder_id,
+                                      baseVisualShapeIndex=cylinder_visual_id, basePosition=cylinder_position,
+                                      baseOrientation=cylinder_orientation)
+
+
+
+
+
 
     # Define a function to continuously check keyboard state
     def monitor_keyboard():
@@ -91,7 +118,7 @@ def main(args):
     # Dictionary to hold the state of each key
     key_state = {
         'up': False, 'down': False, 'left': False, 'right': False,
-        'w': False, 'a': False, 's': False, 'd': False,
+        'w': False, 'a': False, 's': False, 'd': False, 'f': False, 'q': False,
         '1': False, '2': False, '3': False, '4': False, '5': False,
         'cylinder_grab': False, 'top_grab': False
     }
@@ -118,6 +145,10 @@ def main(args):
                 key_state['s'] = True
             elif key.char == 'd':
                 key_state['d'] = True
+            elif key.char == 'f':
+                key_state['f'] = True
+            elif key.char == 'q':
+                key_state['q'] = True
             elif key.char == '1':
                 key_state['1'] = True
             elif key.char == '2':
@@ -154,6 +185,10 @@ def main(args):
                 key_state['s'] = False
             elif key.char == 'd':
                 key_state['d'] = False
+            elif key.char == 'f':
+                key_state['f'] = False
+            elif key.char == 'q':
+                key_state['q'] = False
             elif key.char == '1':
                 key_state['1'] = False
             elif key.char == '2':
@@ -190,10 +225,19 @@ def main(args):
 
     angles = [0.0] * 20
 
+    # hand.get_state[0] : tuple of position
+    # hand.get_state[1]: tuple of rotation
+    # hand.get_state[2]: tuple of finger constraints
+    # hand.get_state[3]: tuple of finger position
+    # hand.get_state[3]: tuple of finger velocity
+    # hand.get_state[3]: tuple of finger torque
+    client.getContactPoints()
+
     try:
         while client.isConnected():
             #values = [client.readUserDebugParameter(uid) for uid in slider_ids]
             # Update position based on key states
+            #Default move mode
             #right hand position
             if key_state['up']:
                 right_position[1] += step
@@ -213,6 +257,11 @@ def main(args):
                 left_position[0] -= step
             if key_state['d']:
                 left_position[0] += step
+
+            # Update the hand's target position and rotation
+            left_hand.set_target(left_position, left_rotation, angles)
+            right_hand.set_target(right_position, right_rotation, angles)
+            time.sleep(0.1)
 
             #holding the cup
             if key_state['cylinder_grab']:
@@ -250,7 +299,6 @@ def main(args):
                 base_indices = [1, 5, 9, 13, 17]
                 if_moving = [False] * 20
 
-                # Initialize target angles for the base of each finger
                 for idx in base_indices:
                     target_angles[idx] = finger_base
                     if_moving[idx] = True
@@ -279,7 +327,6 @@ def main(args):
                         # Check for transition conditions
                         if if_moving[i] and angle_change < 0.01:
                             if_moving[i] = False  # Stop movement for current segment
-                            print(f"Segment at index {i} has stopped moving.")
 
                             # Determine the next segment to activate based on current index
                             if i % 4 == 1:  # Base segment
@@ -287,70 +334,66 @@ def main(args):
                                 if next_index < len(target_angles):  # Check bounds
                                     if_moving[next_index] = True
                                     target_angles[next_index] = finger_middle
-                                    print("Activating middle segment at index", next_index)
 
                             elif i % 4 == 2:  # Middle segment
                                 next_index = i + 1
                                 if next_index < len(target_angles):  # Check bounds
                                     if_moving[next_index] = True
                                     target_angles[next_index] = finger_tip
-                                    print("Activating tip segment at index", next_index)
 
                             left_hand.set_target(left_position, left_rotation, target_angles)
-                            time.sleep(1)
+                            #time.sleep(0.2)
 
                     if all_angles_stable:
+                        angles = target_angles
                         print("All segments have stopped moving.")
                         break
 
                     # Provide a short delay for the system to stabilize
                     time.sleep(0.05)
-
-                # Final stabilization delay
                 time.sleep(10)
-                #We can detect if the object is there if the fingers do not move enough since collision will stop
-                #the finger from moving to the target
-                #hand.get_state[0] : tuple of position
-                #hand.get_state[1]: tuple of rotation
-                #hand.get_state[2]: tuple of finger constraints
 
-            #moving individual fingers
-            if key_state['1']:
-                index += step * 5
-            elif index > 0:
-                index -= step * 5
-            if key_state['2']:
-                middle += step * 5
-            elif middle > 0:
-                middle -= step * 5
-            if key_state['3']:
-                pinky += step * 5
-            elif pinky > 0:
-                pinky -= step * 5
-            if key_state['4']:
-                ring += step * 5
-            elif ring > 0:
-                ring -= step * 5
-            if key_state['5']:
-                thumb += step * 5
-            elif thumb > 0:
-                thumb -= step * 5
+            #if key_state['top_grab']:
 
-            # Assume the getQuaternionFromEuler function and values are handled correctly
-            #rotation = client.getQuaternionFromEuler(values[3:6])
 
-            #angles = values[6:]
-            angles = [0] + [index] * 3 + [0] + [middle] * 3 + [0] + [pinky] * 3 + [0] + [
-                ring] * 3 + [0] + [thumb] * 3
 
-            # Update the hand's target position and rotation
-            left_hand.set_target(left_position, left_rotation, angles)
-            right_hand.set_target(right_position, right_rotation, angles)
+            if key_state['f']: # moving individual fingers
+                print('individual finger mode')
+                while True:
+                    if key_state['q']:
+                        break
+                    if key_state['1']:
+                        index += step * 5
+                    elif index > 0:
+                        index -= step * 5
+                    if key_state['2']:
+                        middle += step * 5
+                    elif middle > 0:
+                        middle -= step * 5
+                    if key_state['3']:
+                        pinky += step * 5
+                    elif pinky > 0:
+                        pinky -= step * 5
+                    if key_state['4']:
+                        ring += step * 5
+                    elif ring > 0:
+                        ring -= step * 5
+                    if key_state['5']:
+                        thumb += step * 5
+                    elif thumb > 0:
+                        thumb -= step * 5
+
+
+                    angles = [0] + [index] * 3 + [0] + [middle] * 3 + [0] + [pinky] * 3 + [0] + [
+                        ring] * 3 + [0] + [thumb] * 3
+
+                    # Update the hand's target position and rotation
+                    left_hand.set_target(left_position, left_rotation, angles)
+                    right_hand.set_target(right_position, right_rotation, angles)
+                    time.sleep(0.1)
 
             # Small delay to prevent updating too quickly
             time.sleep(0.1)
-
-
     except pb.error as err:
         if str(err) not in ['Not connected to physics server.', 'Failed to read parameter.']:
             raise

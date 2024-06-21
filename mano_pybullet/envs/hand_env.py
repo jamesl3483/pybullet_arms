@@ -166,6 +166,7 @@ class HandEnv(gym.Env):
         """
         self._take_action(action)
 
+        #number is originally 240.0
         num_steps = int(self.metadata.get('step_time') * 240.0)
         for _ in range(num_steps):
             self._client.stepSimulation()

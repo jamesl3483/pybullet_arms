@@ -8,7 +8,7 @@ __all__ = ('HandLiftEnv')
 class HandLiftEnv(HandObjectEnv):
     """Lift an object environment class. """
 
-    def __init__(self, target_height=0.25, **kwargs):
+    def __init__(self, target_height= 0.25, **kwargs):
         """Constructor of a HandLiftEnv.
 
         Keyword Arguments:
@@ -60,7 +60,7 @@ class HandLiftEnv(HandObjectEnv):
 if __name__ == '__main__':
     from .wrappers.json_player import JSONPlayer
 
-    env = HandLiftEnv()
+    env = HandLiftEnv(target_height=10.0)
     env.show_window(True)
     env = JSONPlayer(env, './data/lift_duck.json')
     env.reset()
