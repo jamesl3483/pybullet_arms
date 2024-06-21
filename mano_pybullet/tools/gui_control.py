@@ -86,6 +86,8 @@ def main(args):
             angles = values[6:]
 
             hand.set_target(position, rotation, angles)
+            print("position:", hand.get_state()[3])
+            print("torque:", hand.get_state()[5])
     except pb.error as err:
         if str(err) not in ['Not connected to physics server.', 'Failed to read parameter.']:
             raise

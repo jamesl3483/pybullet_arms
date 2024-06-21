@@ -88,7 +88,7 @@ Additional notes:
 In order to run:
     place downloaded MANO models on the same level as this project. aka pybullet_arms and mano_v*_* should be in the same directory.
     run the following command: (the '*' are replaced by the version of the mano model you downloaded and 'path/to' is replaced by the path to the mano model directory)
-        export MANO_MODELS_DIR='/path/to/mano_v*_*/models/'
+        export MANO_MODELS_DIR='/path/to/mano_v1_2/models/'
         python -m mano_pybullet.tools.gui_control
 ``` 
 

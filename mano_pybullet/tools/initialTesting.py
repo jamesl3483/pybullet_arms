@@ -78,26 +78,26 @@ def main(args):
 
     right_hand = HandBody(client, right_hand_model, flags=flags)
     right_position = [.3, 0.0, 0.2]  # X,Y,Z
-    right_rotation = [0.0, 0.0, -1.0, 1.0]  # Quaternion
+    right_rotation = [0.2, 0.0, -1.0, 1.0]  # Quaternion
     right_hand.set_target(right_position, right_rotation)
     client.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
     time.sleep(.2)
-    step = 0.1  # Step size for position adjustments
+    step = 0.01  # Step size for position adjustments
 
     client.setAdditionalSearchPath(pybullet_data.getDataPath())
     planeId = client.loadURDF("plane.urdf")
 
     # Cylinder parameters
-    cylinder_radius = 0.1
+    cylinder_radius = 0.05
     cylinder_height = 0.25
-    cylinder_mass = 10  # mass in kg
+    cylinder_mass = 0.51  # mass in kg
 
     # Create a cylinder
     # orientation is provided as a quaternion, here it's the identity quaternion for no rotation
     cylinder_orientation = client.getQuaternionFromEuler([0, 0, 0])
     cylinder_id = client.createCollisionShape(client.GEOM_CYLINDER, radius=cylinder_radius, height=cylinder_height)
     cylinder_visual_id = client.createVisualShape(client.GEOM_CYLINDER, radius=cylinder_radius,
-                                             halfExtents=[0, cylinder_height / 2, 0], rgbaColor=[1, 0, 0, 1])
+                                             length = cylinder_height, rgbaColor=[1, 0, 0, 1])
     cylinder_position = [0, 0, cylinder_height / 2]  # x, y, z coordinates to place it half above the ground
 
     # Create a multi-body from the collision and visual shapes
@@ -218,6 +218,8 @@ def main(args):
     ################################################
 
     #####For general finger grabbing######
+    grabbing_position = False
+    holding = False
     finger_base = 0.0
     finger_middle = 0.0
     finger_tip = 0.0
@@ -229,9 +231,8 @@ def main(args):
     # hand.get_state[1]: tuple of rotation
     # hand.get_state[2]: tuple of finger constraints
     # hand.get_state[3]: tuple of finger position
-    # hand.get_state[3]: tuple of finger velocity
-    # hand.get_state[3]: tuple of finger torque
-    client.getContactPoints()
+    # hand.get_state[4]: tuple of finger velocity
+    # hand.get_state[5]: tuple of finger torque
 
     try:
         while client.isConnected():
@@ -261,20 +262,22 @@ def main(args):
             # Update the hand's target position and rotation
             left_hand.set_target(left_position, left_rotation, angles)
             right_hand.set_target(right_position, right_rotation, angles)
-            time.sleep(0.1)
+
 
             #holding the cup
-            if key_state['cylinder_grab']:
-
+            if key_state['cylinder_grab'] or holding:
+                holding = False
                 #Move the thumb in the y axis correct position
                 # create a slight cupping shape before contracting the base of the fingers
                 # angles[16] = 1.5
                 # angles[17] = 0.7
                 finger_middle = 0.15
                 finger_tip = 0.25
-                target_angles = [0, finger_base, finger_middle, finger_tip] * 4 + [1.5, 0.7, finger_middle, finger_tip]
-                left_hand.set_target(left_position, left_rotation, target_angles)
+                target_angles = [0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
+                right_hand.set_target(right_position, right_rotation, target_angles)
+                angles = target_angles
                 prev_angle = list(left_hand.get_state()[3])
+                grabbing_position = True
                 time.sleep(0.1)
 
                 while True:
@@ -287,6 +290,7 @@ def main(args):
 
                     time.sleep(0.05)
 
+            if grabbing_position and key_state['top_grab']:
                 #Generally move the finger base first then move up to the tip
 
                 # Flags to control the sequence of movement
@@ -297,63 +301,34 @@ def main(args):
 
                 # Assuming these indices correspond to the base joints of each finger
                 base_indices = [1, 5, 9, 13, 17]
-                if_moving = [False] * 20
+                tip_indices = [3, 7, 11, 15, 19]
 
-                for idx in base_indices:
-                    target_angles[idx] = finger_base
-                    if_moving[idx] = True
+                for idx in range(20):
+                    if tip_indices.__contains__(idx):
+                        continue
+                    target_angles[idx] = finger_tip - idx % 4 * 0.3
 
-                left_hand.set_target(left_position, left_rotation, target_angles)
-                time.sleep(0.05)
-
-                # Tracking list to indicate which segments are actively moving
-                if_moving = [False] * len(target_angles)
-                for i in range(1, len(target_angles), 4):  # Activate base joints movement
-                    if_moving[i] = True
+                right_hand.set_target(right_position, right_rotation, target_angles)
 
                 while True:
                     all_angles_stable = True
-                    current_angles = left_hand.get_state()[2]
-                    angle_changes = left_hand.get_state()[4]  # Assuming this stores angle changes akin to velocities
+                    current_angles = right_hand.get_state()[3]
+                    tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
 
-                    for i in range(len(target_angles)):
-                        angle_change = abs(angle_changes[i])
-
-                        # Check if the current segment is moving and needs update
-                        if if_moving[i] and angle_change >= 0.01:
-                            all_angles_stable = False  # There's still movement
-                            continue  # Skip further processing for this cycle
-
-                        # Check for transition conditions
-                        if if_moving[i] and angle_change < 0.01:
-                            if_moving[i] = False  # Stop movement for current segment
-
-                            # Determine the next segment to activate based on current index
-                            if i % 4 == 1:  # Base segment
-                                next_index = i + 1
-                                if next_index < len(target_angles):  # Check bounds
-                                    if_moving[next_index] = True
-                                    target_angles[next_index] = finger_middle
-
-                            elif i % 4 == 2:  # Middle segment
-                                next_index = i + 1
-                                if next_index < len(target_angles):  # Check bounds
-                                    if_moving[next_index] = True
-                                    target_angles[next_index] = finger_tip
-
-                            left_hand.set_target(left_position, left_rotation, target_angles)
-                            #time.sleep(0.2)
-
-                    if all_angles_stable:
-                        angles = target_angles
-                        print("All segments have stopped moving.")
-                        break
+                    for i in tip_indices:
+                        if tip_torque[i] > 0.55:
+                            target_angles[i] = current_angles[i]        # tip
+                            target_angles[i-1] = current_angles[i-1]    # middle
+                            target_angles[i-2] = current_angles[i-2]    # base
+                            # p.setJointMotorControl2(self.robot.hand_id, i, p.TORQUE_CONTROL, force=torque)
+                            right_hand.set_target(right_position, right_rotation, target_angles)
+                            angles = target_angles
+                        time.sleep(0.2)
+                    holding = True
 
                     # Provide a short delay for the system to stabilize
                     time.sleep(0.05)
                 time.sleep(10)
-
-            #if key_state['top_grab']:
 
 
 
@@ -393,6 +368,9 @@ def main(args):
                     time.sleep(0.1)
 
             # Small delay to prevent updating too quickly
+            #
+            # print("position:", right_hand.get_state()[3])
+            # print("torque:", right_hand.get_state()[5])
             time.sleep(0.1)
     except pb.error as err:
         if str(err) not in ['Not connected to physics server.', 'Failed to read parameter.']:
