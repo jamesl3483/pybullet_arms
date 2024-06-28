@@ -314,6 +314,7 @@ def main(args):
                 if key_state['2']:
                    right_position[2] -= step
                 right_hand.set_target(right_position, right_rotation)
+                print(right_starting_angles)
 
             if mode == 1: # right_grabbing and rotation
                 save_rotation = right_rotation
