@@ -35,6 +35,13 @@ parser.add_argument('--no-self-collisions', dest='self_collisions', action='stor
 parser.set_defaults(self_collisions=False)
 
 
+# hand.get_state[0] : tuple of position
+# hand.get_state[1]: tuple of rotation
+# hand.get_state[2]: tuple of finger constraints
+# hand.get_state[3]: tuple of finger position
+# hand.get_state[4]: tuple of finger velocity
+# hand.get_state[5]: tuple of finger torque
+
 def main(args):
     """Test GUI application."""
     client = BulletClient(pb.GUI)
@@ -72,17 +79,17 @@ def main(args):
     left_position = [-0.3, 0.0, 0.2]  # X,Y,Z
     left_rotation = [0.0, 0.0, 1.0, 1.0]  # Quaternion
     left_hand.set_target(left_position, left_rotation)
+
     #pause to let the hand load into position
     time.sleep(.2)
-    #load right hand
 
+    #load right hand
     right_hand = HandBody(client, right_hand_model, flags=flags)
     right_position = [.3, 0.0, 0.2]  # X,Y,Z
     right_rotation = [0.2, 0.0, -1.0, 1.0]  # Quaternion
     right_hand.set_target(right_position, right_rotation)
     client.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
     time.sleep(.2)
-    step = 0.01  # Step size for position adjustments
 
     client.setAdditionalSearchPath(pybullet_data.getDataPath())
     planeId = client.loadURDF("plane.urdf")
@@ -90,7 +97,7 @@ def main(args):
     # Cylinder parameters
     cylinder_radius = 0.05
     cylinder_height = 0.25
-    cylinder_mass = 0.51  # mass in kg
+    cylinder_mass = 1 # mass in kg
 
     # Create a cylinder
     # orientation is provided as a quaternion, here it's the identity quaternion for no rotation
@@ -105,6 +112,7 @@ def main(args):
                                       baseVisualShapeIndex=cylinder_visual_id, basePosition=cylinder_position,
                                       baseOrientation=cylinder_orientation)
 
+    client.changeDynamics(cylinder_body, -1, lateralFriction=2.0)
 
 
 
@@ -120,7 +128,7 @@ def main(args):
         'up': False, 'down': False, 'left': False, 'right': False,
         'w': False, 'a': False, 's': False, 'd': False, 'f': False, 'q': False,
         '1': False, '2': False, '3': False, '4': False, '5': False,
-        'cylinder_grab': False, 'top_grab': False
+        'cylinder_grab': False, 'top_grab': False, 'movement_mode': False, 'switch_hand': False
     }
 
     def on_press(key):
@@ -137,6 +145,10 @@ def main(args):
                 key_state['cylinder_grab'] = True
             elif key.char == 'r':
                 key_state['top_grab'] = True
+            elif key.char == 'z':
+                key_state['movement_mode'] = True
+            elif key.char == 'p':
+                key_state['switch_hand'] = True
             elif key.char == 'w':
                 key_state['w'] = True
             elif key.char == 'a':
@@ -177,6 +189,10 @@ def main(args):
                 key_state['cylinder_grab'] = False
             elif key.char == 'r':
                 key_state['top_grab'] = False
+            elif key.char == 'z':
+                key_state['movement_mode'] = False
+            elif key.char == 'p':
+                key_state['switch_hand'] = False
             elif key.char == 'w':
                 key_state['w'] = False
             elif key.char == 'a':
@@ -220,95 +236,191 @@ def main(args):
     #####For general finger grabbing######
     grabbing_position = False
     holding = False
+    #For saving state when switching hands
+    prev_grabbing_position = False
+    prev_holding = False
+    prev_angles = [0] * 20
+
     finger_base = 0.0
     finger_middle = 0.0
     finger_tip = 0.0
     ######################################
-
+    mode = 0  # 0 = translation, 1 = rotation, 2 grabbing mode
+    step = 0.01  # Step size for position adjustments
+    ROTATION_INCREMENT = 0.05
     angles = [0.0] * 20
+    is_right = False
 
-    # hand.get_state[0] : tuple of position
-    # hand.get_state[1]: tuple of rotation
-    # hand.get_state[2]: tuple of finger constraints
-    # hand.get_state[3]: tuple of finger position
-    # hand.get_state[4]: tuple of finger velocity
-    # hand.get_state[5]: tuple of finger torque
+    def is_hand_stable():
+        while True:
+            all_angles_stable = True
+            if is_right:
+                for i, angle in enumerate(right_hand.get_state()[4]):
+                    if abs(angle) > 0.01:
+                        all_angles_stable = False
+            else:
+                for i, angle in enumerate(left_hand.get_state()[4]):
+                    if abs(angle) > 0.01:
+                        all_angles_stable = False
+            if all_angles_stable:
+                break
+
+            time.sleep(0.05)
+
+    def set_hand(target_angles):
+        if is_right:
+            right_hand.set_target(right_position, right_rotation, target_angles)
+        else:
+            left_hand.set_target(left_position, left_rotation, target_angles)
+
+    # Check if hands need to switch
 
     try:
         while client.isConnected():
-            #values = [client.readUserDebugParameter(uid) for uid in slider_ids]
-            # Update position based on key states
-            #Default move mode
-            #right hand position
-            if key_state['up']:
-                right_position[1] += step
-            if key_state['down']:
-                right_position[1] -= step
-            if key_state['left']:
-                right_position[0] -= step
-            if key_state['right']:
-                right_position[0] += step
+            # Check if hands need to switch and check previous state
+            if key_state['switch_hand']:
+                is_right = not is_right
+                temp = holding
+                temp1 = grabbing_position
+                temp2 = angles
 
-            #left hand position
-            if key_state['w']:
-                left_position[1] += step
-            if key_state['s']:
-                left_position[1] -= step
-            if key_state['a']:
-                left_position[0] -= step
-            if key_state['d']:
-                left_position[0] += step
+                holding = prev_holding
+                grabbing_position = prev_grabbing_position
+                angles = prev_angles
 
-            # Update the hand's target position and rotation
-            left_hand.set_target(left_position, left_rotation, angles)
-            right_hand.set_target(right_position, right_rotation, angles)
+                prev_holding = temp
+                prev_grabbing_position = temp1
+                prev_angles = temp2
 
 
-            #holding the cup
-            if key_state['cylinder_grab'] or holding:
-                holding = False
-                #Move the thumb in the y axis correct position
-                # create a slight cupping shape before contracting the base of the fingers
-                # angles[16] = 1.5
-                # angles[17] = 0.7
-                finger_middle = 0.15
-                finger_tip = 0.25
-                target_angles = [0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
-                right_hand.set_target(right_position, right_rotation, target_angles)
-                angles = target_angles
-                prev_angle = list(left_hand.get_state()[3])
-                grabbing_position = True
-                time.sleep(0.1)
+                # Movement mode translation or rotation
+            if key_state['movement_mode']:
+                mode = (mode + 1) % 2
 
-                while True:
-                    all_angles_stable = True
-                    for i, angle in enumerate(left_hand.get_state()[4]):
-                        if abs(angle) > 0.01:
-                            all_angles_stable = False
-                    if all_angles_stable:
-                        break
+            if is_right:
+                # Translation
+                if mode == 0:
+                   if key_state['up']:
+                       right_position[1] += step
+                   if key_state['down']:
+                       right_position[1] -= step
+                   if key_state['left']:
+                       right_position[0] -= step
+                   if key_state['right']:
+                       right_position[0] += step
+                   if key_state['1']:
+                       right_position[2] += step
+                   if key_state['2']:
+                       right_position[2] -= step
+                   right_hand.set_target(right_position, right_rotation, angles)
 
-                    time.sleep(0.05)
+                if mode == 1:
+                    right_rotation = list(client.getEulerFromQuaternion(right_rotation))
+                    if key_state['left']:
+                        right_rotation[2] += ROTATION_INCREMENT  # Yaw left
+                    if key_state['right']:
+                        right_rotation[2] -= ROTATION_INCREMENT  # Yaw right
+                    if key_state['up']:
+                        right_rotation[1] += ROTATION_INCREMENT  # Pitch up
+                    if key_state['down']:
+                        right_rotation[1] -= ROTATION_INCREMENT  # Pitch down
+                    if key_state['1']:
+                        right_rotation[0] += ROTATION_INCREMENT  # Roll left
+                    if key_state['2']:
+                        right_rotation[0] -= ROTATION_INCREMENT  # Roll right
+                    right_rotation = client.getQuaternionFromEuler(right_rotation)
+                    right_hand.set_target(right_position, right_rotation, angles)
 
-            if grabbing_position and key_state['top_grab']:
-                #Generally move the finger base first then move up to the tip
+                if key_state['cylinder_grab'] or holding:
+                    holding = False
+                    # Move the thumb in the y axis correct position
+                    # create a slight cupping shape before contracting the base of the fingers
+                    # angles[16] = 1.5
+                    # angles[17] = 0.7
+                    finger_middle = 0.15
+                    finger_tip = 0.25
+                    target_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
+                    target_angles[8] = - 0.2
+                    angles = target_angles
+                    grabbing_position = True
+                    right_hand.set_target(right_position, right_rotation, target_angles)
+                    time.sleep(0.1)
+                    is_hand_stable()
 
-                # Flags to control the sequence of movement
+            else:
+                #Translation
+                if mode == 0:
+                    if key_state['up']:
+                        left_position[1] += step
+                    if key_state['down']:
+                        left_position[1] -= step
+                    if key_state['left']:
+                        left_position[0] -= step
+                    if key_state['right']:
+                        left_position[0] += step
+                    if key_state['1']:
+                        left_position[2] += step
+                    if key_state['2']:
+                        left_position[2] -= step
+                    left_hand.set_target(left_position, left_rotation, angles)
+
+                # Rotation
+                if mode == 1:
+                    left_rotation = list(client.getEulerFromQuaternion(left_rotation))
+                    if key_state['left']:
+                        left_rotation[2] += ROTATION_INCREMENT  # Yaw left
+                    if key_state['right']:
+                        left_rotation[2] -= ROTATION_INCREMENT  # Yaw right
+                    if key_state['up']:
+                        left_rotation[1] += ROTATION_INCREMENT  # Pitch up
+                    if key_state['down']:
+                        left_rotation[1] -= ROTATION_INCREMENT  # Pitch down
+                    if key_state['1']:
+                        left_rotation[0] += ROTATION_INCREMENT  # Roll left
+                    if key_state['2']:
+                        left_rotation[0] -= ROTATION_INCREMENT  # Roll right
+                    left_rotation = client.getQuaternionFromEuler(left_rotation)
+                    left_rotation.set_target(left_position, left_rotation, angles)
+
+                #Preparation to grab
+                if key_state['cylinder_grab'] or holding:
+                    holding = False
+                    #Move the thumb in the y axis correct position
+                    # create a slight cupping shape before contracting the base of the fingers
+                    finger_middle = 0.15
+                    finger_tip = 0.25
+                    target_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
+                    target_angles[8] = 0.2
+                    angles = target_angles
+                    grabbing_position = True
+                    left_hand.set_target(left_position, left_rotation, angles)
+                    time.sleep(0.1)
+                    is_hand_stable()
+
+            #After here, it doesnt matter which hand, it works for both hands
+            # holding cylinder position
+            if grabbing_position and key_state['q']:
                 # Initial target angles for each segment of the finger
                 finger_base = 1.5
                 finger_middle = 1.7
                 finger_tip = 1.7
 
-                # Assuming these indices correspond to the base joints of each finger
+                # Indices corresponding to the base and tip joints of each finger
                 base_indices = [1, 5, 9, 13, 17]
                 tip_indices = [3, 7, 11, 15, 19]
 
-                for idx in range(20):
-                    if tip_indices.__contains__(idx):
-                        continue
-                    target_angles[idx] = finger_tip - idx % 4 * 0.3
+                target_angles = [0] * 20
 
-                right_hand.set_target(right_position, right_rotation, target_angles)
+                # Set initial target angles for the fingers
+                for idx in range(20):
+                    if idx in base_indices:
+                        target_angles[idx] = finger_base
+                    elif idx in tip_indices:
+                        target_angles[idx] = finger_tip
+                    else:
+                        target_angles[idx] = finger_middle
+
+                set_hand(target_angles)
 
                 while True:
                     all_angles_stable = True
@@ -316,21 +428,77 @@ def main(args):
                     tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
 
                     for i in tip_indices:
-                        if tip_torque[i] > 0.55:
-                            target_angles[i] = current_angles[i]        # tip
-                            target_angles[i-1] = current_angles[i-1]    # middle
-                            target_angles[i-2] = current_angles[i-2]    # base
-                            # p.setJointMotorControl2(self.robot.hand_id, i, p.TORQUE_CONTROL, force=torque)
-                            right_hand.set_target(right_position, right_rotation, target_angles)
-                            angles = target_angles
-                        time.sleep(0.2)
-                    holding = True
+                        if tip_torque[i] > 0.45:
+                            # Adjust angles if the torque exceeds the threshold
+                            target_angles[i] = current_angles[i]  # tip
+                            target_angles[i - 1] = current_angles[i - 1]  # middle
+                            target_angles[i - 2] = current_angles[i - 2]  # base
 
-                    # Provide a short delay for the system to stabilize
-                    time.sleep(0.05)
+                            # Apply torque to maintain the grip
+                            set_hand(target_angles)
+                    # Short delay to allow stabilization
+                    time.sleep(0.2)
+
+                    # Check if all angles are stable
+                    all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
+
+                    if all_angles_stable:
+                        break
+
+                    # Final delay to ensure full stabilization
+                    time.sleep(0.1)
                 time.sleep(10)
 
+            # Grabbing the lid
+            if key_state['top_grab']:
+                # Initial target angles for each segment of the finger
+                finger_base = 1.5
+                finger_middle = 1.7
+                finger_tip = 1.7
 
+                # Indices corresponding to the base and tip joints of each finger
+                base_indices = [1, 5, 9, 13, 17]
+                tip_indices = [3, 7, 11, 15, 19]
+
+                target_angles = [0] * 20
+
+                # Set initial target angles for the fingers
+                for idx in range(20):
+                    if idx in base_indices:
+                        target_angles[idx] = 0
+                    elif idx in tip_indices:
+                        target_angles[idx] = finger_tip
+                    else:
+                        target_angles[idx] = finger_middle
+
+                set_hand(target_angles)
+
+                while True:
+                    all_angles_stable = True
+                    current_angles = right_hand.get_state()[3]
+                    tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
+
+                    for i in tip_indices:
+                        if tip_torque[i] > 0.45:
+                            # Adjust angles if the torque exceeds the threshold
+                            target_angles[i] = current_angles[i]  # tip
+                            target_angles[i - 1] = current_angles[i - 1]  # middle
+                            target_angles[i - 2] = current_angles[i - 2]  # base
+
+                            # Apply torque to maintain the grip
+                            set_hand(target_angles)
+                    # Short delay to allow stabilization
+                    time.sleep(0.2)
+
+                    # Check if all angles are stable
+                    all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
+
+                    if all_angles_stable:
+                        break
+
+                    # Final delay to ensure full stabilization
+                    time.sleep(0.1)
+                time.sleep(10)
 
             if key_state['f']: # moving individual fingers
                 print('individual finger mode')
@@ -363,8 +531,7 @@ def main(args):
                         ring] * 3 + [0] + [thumb] * 3
 
                     # Update the hand's target position and rotation
-                    left_hand.set_target(left_position, left_rotation, angles)
-                    right_hand.set_target(right_position, right_rotation, angles)
+                    set_hand(angles)
                     time.sleep(0.1)
 
             # Small delay to prevent updating too quickly
@@ -372,6 +539,11 @@ def main(args):
             # print("position:", right_hand.get_state()[3])
             # print("torque:", right_hand.get_state()[5])
             time.sleep(0.1)
+
+
+
+
+
     except pb.error as err:
         if str(err) not in ['Not connected to physics server.', 'Failed to read parameter.']:
             raise
