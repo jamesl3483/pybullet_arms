@@ -123,14 +123,14 @@ class HandBody:
                 self._constraint_id,
                 jointChildPivot=position,
                 jointChildFrameOrientation=orientation,
-                maxForce=10.0)
+                maxForce=50.0)
         if joint_angles is not None:
             self._client.setJointMotorControlArray(
                 bodyUniqueId=self._body_id,
                 jointIndices=self._joint_indices,
                 controlMode=pb.POSITION_CONTROL,
                 targetPositions=joint_angles,
-                forces=[0.5]*len(joint_angles))
+                forces=[2.5]*len(joint_angles))
 
     def get_mano_state(self):
         """Get current hand state as a MANO model state.

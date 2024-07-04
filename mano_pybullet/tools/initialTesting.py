@@ -11,6 +11,7 @@ import time
 
 from ..hand_body import HandBody
 from ..hand_model import HandModel20, HandModel45
+from ..mano_model import ManoModel
 
 parser = argparse.ArgumentParser('GUI debug tool')
 parser.add_argument('--dofs', type=int, default=20,
@@ -93,10 +94,10 @@ def main(args):
     #load right hand
     right_hand = HandBody(client, right_hand_model, flags=flags)
     right_position = [.3, 0.0, 0.2]  # X,Y,Z
-    right_rotation = client.getQuaternionFromEuler([0.2, 0.1, -2.0])   # Quaternion
+    right_rotation = client.getQuaternionFromEuler([0.2, 0.3, -2.0])   # Quaternion
     finger_middle = 0.15
     finger_tip = 0.25
-    right_starting_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
+    right_starting_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [1.0, 1.7, 0, finger_tip]
     right_starting_angles[8] = -0.2
     angles = [0] * 20
     right_hand.set_target(right_position, right_rotation, right_starting_angles)
@@ -107,9 +108,9 @@ def main(args):
     planeId = client.loadURDF("plane.urdf")
 
     # Cylinder parameters
-    cylinder_radius = 0.05
+    cylinder_radius = 0.04
     cylinder_height = 0.25
-    cylinder_mass = 5 # mass in kg
+    cylinder_mass = 2 # mass in kg
 
     # Create a cylinder
     # orientation is provided as a quaternion, here it's the identity quaternion for no rotation
@@ -124,11 +125,9 @@ def main(args):
                                       baseVisualShapeIndex=cylinder_visual_id, basePosition=cylinder_position,
                                       baseOrientation=cylinder_orientation)
 
-    client.changeDynamics(cylinder_body, -1, lateralFriction=2.0)
-
-
-
-
+    # # Adjust the dynamics of the object
+    # client.changeDynamics(cylinder_body, -1, mass=cylinder_mass, lateralFriction=2.0, spinningFriction=1.0,
+    #                       localInertiaDiagonal=[0.015, 0.015, 0.015])
 
     # Define a function to continuously check keyboard state
     def monitor_keyboard():
@@ -257,6 +256,7 @@ def main(args):
     step = 0.01  # Step size for position adjustments
     ROTATION_INCREMENT = 0.05
     is_right = False
+    constraint_id = None
 
     def is_hand_stable():
         while True:
@@ -292,6 +292,7 @@ def main(args):
             # Press 'z' to switch between modes
             if key_state['movement_mode']:
                 mode = (mode + 1) % 4
+                time.sleep(0.3)
             ########################################
 
             if mode == 0: #right_translation
@@ -326,17 +327,93 @@ def main(args):
                     right_rotation[0] += ROTATION_INCREMENT  # Pitch up
                 if key_state['down']:
                     right_rotation[0] -= ROTATION_INCREMENT  # Pitch down
+
+                def create_grasp_constraint(client, hand_id, hand_link, object_id, pivotInHand, pivotInObject, ornHand,
+                                            ornObject):
+                    constraint_id = client.createConstraint(
+                        parentBodyUniqueId=hand_id,
+                        parentLinkIndex=hand_link,
+                        childBodyUniqueId=object_id,
+                        childLinkIndex=-1,
+                        jointType=pb.JOINT_FIXED,
+                        jointAxis=[0, 0, 0],
+                        parentFramePosition=pivotInHand,
+                        childFramePosition=pivotInObject,
+                        parentFrameOrientation=ornHand,
+                        childFrameOrientation=ornObject
+                    )
+
+                    # Set ERP and CFM for better stability
+                    client.changeConstraint(constraint_id, erp=0.2, maxForce=500)
+                    return constraint_id
+
                 if key_state['cylinder_grab']:
+                    # Check if we have contact and create a constraint
+                    def check_contact(client, hand_id, object_id):
+                        contacts = client.getContactPoints(hand_id, object_id)
+                        for contact in contacts:
+                            if contact[8] < 0.01:  # Check if contact distance is less than 1cm
+                                return True
+                        return False
+
+                    if check_contact(pb, right_hand.body_id, cylinder_body):
+                        print("Contact made with cylinder, grasping now.")
+                        contacts = pb.getContactPoints(right_hand.body_id, cylinder_body)
+                        # target_angles = right_hand.get_state()[3]
+                        if contacts:
+                            contact = contacts[0]
+                            link_index = contact[3]  # Get link index from the contact point
+                            pivotHand = contact[6]  # Contact point on the hand in its local frame
+                            pivot = contact[5]  # Contact point on the object in its local frame
+
+                            # Get world positions and orientations
+                            hand_world_position, hand_world_orientation = pb.getLinkState(right_hand.body_id,
+                                                                                          link_index)[0:2]
+                            object_world_position, object_world_orientation = pb.getBasePositionAndOrientation(
+                                cylinder_body)
+
+                            # Convert world coordinates to local coordinates for the hand
+                            parent_frame_position, parent_frame_orientation = pb.invertTransform(hand_world_position,
+                                                                                                 hand_world_orientation)
+                            pivotInHand, _ = pb.multiplyTransforms(
+                                parent_frame_position,
+                                parent_frame_orientation,
+                                pivot,
+                                [0, 0, 0, 1]
+                            )
+
+                            # Convert world coordinates to local coordinates for the object
+                            child_frame_position, child_frame_orientation = pb.invertTransform(object_world_position,
+                                                                                               object_world_orientation)
+                            pivotInObject, _ = pb.multiplyTransforms(
+                                child_frame_position,
+                                child_frame_orientation,
+                                pivot,
+                                [0, 0, 0, 1]
+                            )
+
+                            # Create the constraint
+                            cid = create_grasp_constraint(pb, right_hand.body_id, link_index,
+                                                          cylinder_body, pivotInHand, pivotInObject,
+                                                          parent_frame_orientation, child_frame_orientation)
+
+                            print(f"Constraint created at link index {link_index}")
+                            constraint_id = cid  # Store the constraint ID for future operations
+
+
+
                     # Initial target angles for each segment of the finger
-                    finger_base = 1.5
-                    finger_middle = 1.0
-                    finger_tip = 1.0
+                    finger_base = 1.0
+                    finger_middle = 0.7
+                    finger_tip = 0.5
 
                     # Indices corresponding to the base and tip joints of each finger
-                    base_indices = [1, 5, 9, 13, 17]
+                    base_indices = [1, 5, 9, 13]
+                    middle_indices = [2, 6, 10, 14, 18]
                     tip_indices = [3, 7, 11, 15, 19]
 
                     target_angles = right_starting_angles[:]
+
                     # Set initial target angles for the fingers
                     for idx in range(20):
                         if idx in base_indices:
@@ -345,44 +422,41 @@ def main(args):
                             target_angles[idx] = finger_tip
                         else:
                             target_angles[idx] = finger_middle
+
                     angles = target_angles
                     right_hand.set_target(right_position, right_rotation, target_angles)
+                    time.sleep(0.2)
 
-                    while True:
-                        all_angles_stable = True
-                        current_angles = right_hand.get_state()[3]
-                        tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
 
-                        for i in tip_indices:
-                            if tip_torque[i] > 0.45:
-                                # Adjust angles if the torque exceeds the threshold
-                                target_angles[i] = current_angles[i]  # tip
-                                target_angles[i - 1] = current_angles[i - 1]  # middle
-                                target_angles[i - 2] = current_angles[i - 2]  # base
 
-                                # Apply torque to maintain the grip
-                                angles = target_angles
-                                right_hand.set_target(right_position, right_rotation, target_angles)
-                        # # Short delay to allow stabilization
-                        # time.sleep(0.2)
 
-                        # Check if all angles are stable
-                        all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
+                    # Stabilize the hand to ensure it holds the object without jittering
+                    def stabilize_hand(hand):
+                        """Ensure the joints are not oscillating."""
+                        while True:
+                            # hand.set_target(right_position, right_rotation, target_angles)
+                            all_angles_stable = True
+                            for angle in hand.get_state()[4]:  # Get angular velocities
+                                if abs(angle) > 0.01:  # Threshold for considering stable
+                                    all_angles_stable = False
+                            if all_angles_stable:
+                                break
+                            time.sleep(0.05)
 
-                        if all_angles_stable:
-                            break
+                    stabilize_hand(right_hand)
 
-                        # Final delay to ensure full stabilization
-                        time.sleep(0.1)
+                # If the `q` key is pressed, remove the constraint
+                if key_state['q'] and constraint_id:
+                    pb.removeConstraint(constraint_id)
+                    print("Constraint removed.")
+                    constraint_id = None  # Reset the constraint ID
+                    angles = right_starting_angles
+                    right_hand.set_target(right_position, right_rotation, angles)
 
-                if key_state['q']:  # releasing cylinder
-                    # angles = right_starting_angles
-                    right_hand.set_target(right_position, right_rotation, right_starting_angles)
-                    time.sleep(0.1)
+
 
                 right_rotation = client.getQuaternionFromEuler(right_rotation)
-                if right_rotation != save_rotation:
-                    right_hand.set_target(right_position, right_rotation)
+                right_hand.set_target(right_position, right_rotation)
 
             if mode == 2: #left_translation
                 if is_right:

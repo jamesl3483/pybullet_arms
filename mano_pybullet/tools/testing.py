@@ -1,695 +1,469 @@
-"""Keyboard Input manipulation."""
-
-import argparse
-import numpy as np
-import pybullet as pb
-import pybullet_data
-from pybullet_utils.bullet_client import BulletClient
-from pynput import keyboard
-import threading
+import pybullet as p
 import time
-
-from ..hand_body import HandBody
-from ..hand_model import HandModel20, HandModel45
-
-parser = argparse.ArgumentParser('GUI debug tool')
-parser.add_argument('--dofs', type=int, default=20,
-                    help='Number of degrees of freedom (20 or 45)')
-
-parser.add_argument('--left-hand', dest='left_hand', action='store_true',
-                    help='Show left hand')
-parser.add_argument('--right-hand', dest='left_hand', action='store_false',
-                    help='Show right hand')
-parser.set_defaults(left_hand=False)
-
-parser.add_argument('--visual-shapes', dest='visual', action='store_true',
-                    help='Show visual shapes')
-parser.add_argument('--no-visual-shapes', dest='visual', action='store_false',
-                    help='Hide visual shapes')
-parser.set_defaults(visual=True)
-
-parser.add_argument('--self-collisions', dest='self_collisions', action='store_true',
-                    help='Enable self collisions')
-parser.add_argument('--no-self-collisions', dest='self_collisions', action='store_false',
-                    help='Disable self collisions')
-parser.set_defaults(self_collisions=False)
-
-
-# hand.get_state[0] : tuple of position
-# hand.get_state[1]: tuple of rotation
-# hand.get_state[2]: tuple of finger constraints
-# hand.get_state[3]: tuple of finger position
-# hand.get_state[4]: tuple of finger velocity
-# hand.get_state[5]: tuple of finger torque
-
-def main(args):
-    """Test GUI application."""
-    client = BulletClient(pb.GUI)
-    client.setGravity(0, 0, -10)
-
-    client.resetDebugVisualizerCamera(
-        cameraDistance=0.5,
-        cameraYaw=-40.0,
-        cameraPitch=-40.0,
-        cameraTargetPosition=[0.0, 0.0, 0.0]
-    )
-
-    if args.dofs == 20:
-        left_hand_model = HandModel20(left_hand=True)
-        right_hand_model = HandModel20(left_hand=False)
-    elif args.dofs == 45:
-        left_hand_model = HandModel45(left_hand=args.left_hand)
-        right_hand_model = HandModel45(left_hand=args.left_hand)
-    else:
-        raise ValueError('Only 20 and 45 DoF models are supported.')
-
-    flags = sum([
-        HandBody.FLAG_ENABLE_COLLISION_SHAPES,
-        HandBody.FLAG_ENABLE_VISUAL_SHAPES * args.visual,
-        HandBody.FLAG_JOINT_LIMITS,
-        HandBody.FLAG_DYNAMICS,
-        HandBody.FLAG_USE_SELF_COLLISION * args.self_collisions])
-
-    client.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 0)
-
-    #Start simulation
-    client.setRealTimeSimulation(True)
-    #load left hand
-    left_hand = HandBody(client, left_hand_model, flags=flags)
-    left_position = [-0.3, 0.0, 0.2]  # X,Y,Z
-    left_rotation = [0.0, 0.0, 1.0, 1.0]  # Quaternion
-    finger_base = 0.0
-    finger_middle = 0.15
-    finger_tip = 0.25
-    # target_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
-    # target_angles[8] = 0.2
-    left_starting_angles = [0] * 20
-    angles = left_starting_angles[:]
-    left_hand.set_target(left_position, left_rotation, left_starting_angles)
-
-    #pause to let the hand load into position
-    time.sleep(.2)
-
-    #load right hand
-    right_hand = HandBody(client, right_hand_model, flags=flags)
-    right_position = [.3, 0.0, 0.2]  # X,Y,Z
-    right_rotation = client.getQuaternionFromEuler([0.2, 0.1, -2.0])   # Quaternion
-    finger_middle = 0.15
-    finger_tip = 0.25
-    right_starting_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
-    right_starting_angles[8] = -0.2
-    angles = [0] * 20
-    right_hand.set_target(right_position, right_rotation, right_starting_angles)
-    client.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
-    time.sleep(.2)
-
-    client.setAdditionalSearchPath(pybullet_data.getDataPath())
-    planeId = client.loadURDF("plane.urdf")
-
-    # Cylinder parameters
-    cylinder_radius = 0.05
-    cylinder_height = 0.25
-    cylinder_mass = 5 # mass in kg
-
-    # Create a cylinder
-    # orientation is provided as a quaternion, here it's the identity quaternion for no rotation
-    cylinder_orientation = client.getQuaternionFromEuler([0, 0, 0])
-    cylinder_id = client.createCollisionShape(client.GEOM_CYLINDER, radius=cylinder_radius, height=cylinder_height)
-    cylinder_visual_id = client.createVisualShape(client.GEOM_CYLINDER, radius=cylinder_radius,
-                                             length = cylinder_height, rgbaColor=[1, 0, 0, 1])
-    cylinder_position = [0, 0, cylinder_height / 2]  # x, y, z coordinates to place it half above the ground
-
-    # Create a multi-body from the collision and visual shapes
-    cylinder_body = client.createMultiBody(baseMass=cylinder_mass, baseCollisionShapeIndex=cylinder_id,
-                                      baseVisualShapeIndex=cylinder_visual_id, basePosition=cylinder_position,
-                                      baseOrientation=cylinder_orientation)
-
-    client.changeDynamics(cylinder_body, -1, lateralFriction=2.0)
-
-
-
-
-
-    # Define a function to continuously check keyboard state
-    def monitor_keyboard():
-        with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-            listener.join()
-
-    # Dictionary to hold the state of each key
-    key_state = {
-        'up': False, 'down': False, 'left': False, 'right': False,
-        'w': False, 'a': False, 's': False, 'd': False, 'f': False, 'q': False,
-        '1': False, '2': False, '3': False, '4': False, '5': False,
-        'cylinder_grab': False, 'top_grab': False, 'movement_mode': False, 'switch_hand': False
-    }
-
-    def on_press(key):
-        try:
-            if key == keyboard.Key.up:
-                key_state['up'] = True
-            elif key == keyboard.Key.down:
-                key_state['down'] = True
-            elif key == keyboard.Key.left:
-                key_state['left'] = True
-            elif key == keyboard.Key.right:
-                key_state['right'] = True
-            elif key.char == 'e':
-                key_state['cylinder_grab'] = True
-            elif key.char == 'r':
-                key_state['top_grab'] = True
-            elif key.char == 'z':
-                key_state['movement_mode'] = True
-            elif key.char == 'p':
-                key_state['switch_hand'] = True
-            elif key.char == 'w':
-                key_state['w'] = True
-            elif key.char == 'a':
-                key_state['a'] = True
-            elif key.char == 's':
-                key_state['s'] = True
-            elif key.char == 'd':
-                key_state['d'] = True
-            elif key.char == 'f':
-                key_state['f'] = True
-            elif key.char == 'q':
-                key_state['q'] = True
-            elif key.char == '1':
-                key_state['1'] = True
-            elif key.char == '2':
-                key_state['2'] = True
-            elif key.char == '3':
-                key_state['3'] = True
-            elif key.char == '4':
-                key_state['4'] = True
-            elif key.char == '5':
-                key_state['5'] = True
-
-        except AttributeError:
-            pass
-
-    def on_release(key):
-        try:
-            if key == keyboard.Key.up:
-                key_state['up'] = False
-            elif key == keyboard.Key.down:
-                key_state['down'] = False
-            elif key == keyboard.Key.left:
-                key_state['left'] = False
-            elif key == keyboard.Key.right:
-                key_state['right'] = False
-            elif key.char == 'e':
-                key_state['cylinder_grab'] = False
-            elif key.char == 'r':
-                key_state['top_grab'] = False
-            elif key.char == 'z':
-                key_state['movement_mode'] = False
-            elif key.char == 'p':
-                key_state['switch_hand'] = False
-            elif key.char == 'w':
-                key_state['w'] = False
-            elif key.char == 'a':
-                key_state['a'] = False
-            elif key.char == 's':
-                key_state['s'] = False
-            elif key.char == 'd':
-                key_state['d'] = False
-            elif key.char == 'f':
-                key_state['f'] = False
-            elif key.char == 'q':
-                key_state['q'] = False
-            elif key.char == '1':
-                key_state['1'] = False
-            elif key.char == '2':
-                key_state['2'] = False
-            elif key.char == '3':
-                key_state['3'] = False
-            elif key.char == '4':
-                key_state['4'] = False
-            elif key.char == '5':
-                key_state['5'] = False
-        except AttributeError:
-            pass
-
-        if key == keyboard.Key.esc:
-            return False  # Stop listener
-
-    # Start the keyboard monitoring in a separate thread
-    thread = threading.Thread(target=monitor_keyboard)
-    thread.start()
-
-    #######For individual finger contraction#####
-    index = 0.0
-    middle = 0.0
-    pinky = 0.0
-    ring = 0.0
-    thumb = 0.0
-    ################################################
-
-
-    #For saving state when switching hands
-    prev_grabbing_position = False
-    prev_holding = False
-    prev_angles = angles
-
-
-    ######################################
-    mode = 0
-    step = 0.01  # Step size for position adjustments
-    ROTATION_INCREMENT = 0.05
-    is_right = False
-
-    def is_hand_stable():
-        while True:
-            all_angles_stable = True
-            if is_right:
-                for i, angle in enumerate(right_hand.get_state()[4]):
-                    if abs(angle) > 0.01:
-                        all_angles_stable = False
-            else:
-                for i, angle in enumerate(left_hand.get_state()[4]):
-                    if abs(angle) > 0.01:
-                        all_angles_stable = False
-            if all_angles_stable:
-                break
-
-            time.sleep(0.05)
-
-    def set_hand(target_angles):
-        if is_right:
-            right_hand.set_target(right_position, right_rotation, target_angles)
-        else:
-            left_hand.set_target(left_position, left_rotation, target_angles)
-
-
-    try:
-        while client.isConnected():
-            # Movement mode translation or rotation
-
-
-            ################# MODES ####################
-            # 0 = right_translation, 1 = right_grab and 2 degree rotation
-            # 2 = left_translation, 3 = left_grab and 2 degree rotation
-            # Press 'z' to switch between modes
-            if key_state['movement_mode']:
-                mode = (mode + 1) % 4
-            ########################################
-
-            if mode == 0: #right_translation
-                if not is_right:
-                    is_right = not is_right
-                    temp2 = angles
-                    angles = prev_angles
-                    prev_angles = temp2
-
-                if key_state['up']:
-                   right_position[1] += step
-                if key_state['down']:
-                   right_position[1] -= step
-                if key_state['left']:
-                   right_position[0] -= step
-                if key_state['right']:
-                   right_position[0] += step
-                if key_state['1']:
-                   right_position[2] += step
-                if key_state['2']:
-                   right_position[2] -= step
-                right_hand.set_target(right_position, right_rotation)
-                print(right_starting_angles)
-
-            if mode == 1: # right_grabbing and rotation
-                save_rotation = right_rotation
-                right_rotation = list(client.getEulerFromQuaternion(right_rotation))
-                if key_state['left']:
-                    right_rotation[2] += ROTATION_INCREMENT  # Yaw left
-                if key_state['right']:
-                    right_rotation[2] -= ROTATION_INCREMENT  # Yaw right
-                if key_state['up']:
-                    right_rotation[0] += ROTATION_INCREMENT  # Pitch up
-                if key_state['down']:
-                    right_rotation[0] -= ROTATION_INCREMENT  # Pitch down
-                if key_state['cylinder_grab']:
-                    # Initial target angles for each segment of the finger
-                    finger_base = 1.5
-                    finger_middle = 1.0
-                    finger_tip = 1.0
-
-                    # Indices corresponding to the base and tip joints of each finger
-                    base_indices = [1, 5, 9, 13, 17]
-                    tip_indices = [3, 7, 11, 15, 19]
-
-                    target_angles = right_starting_angles[:]
-                    # Set initial target angles for the fingers
-                    for idx in range(20):
-                        if idx in base_indices:
-                            target_angles[idx] = finger_base
-                        elif idx in tip_indices:
-                            target_angles[idx] = finger_tip
-                        else:
-                            target_angles[idx] = finger_middle
-                    angles = target_angles
-                    right_hand.set_target(right_position, right_rotation, target_angles)
-
-                    while True:
-                        all_angles_stable = True
-                        current_angles = right_hand.get_state()[3]
-                        tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                        for i in tip_indices:
-                            if tip_torque[i] > 0.45:
-                                # Adjust angles if the torque exceeds the threshold
-                                target_angles[i] = current_angles[i]  # tip
-                                target_angles[i - 1] = current_angles[i - 1]  # middle
-                                target_angles[i - 2] = current_angles[i - 2]  # base
-
-                                # Apply torque to maintain the grip
-                                angles = target_angles
-                                right_hand.set_target(right_position, right_rotation, target_angles)
-                        # # Short delay to allow stabilization
-                        # time.sleep(0.2)
-
-                        # Check if all angles are stable
-                        all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                        if all_angles_stable:
-                            break
-
-                        # Final delay to ensure full stabilization
-                        time.sleep(0.1)
-
-                if key_state['q']:  # releasing cylinder
-                    # angles = right_starting_angles
-                    right_hand.set_target(right_position, right_rotation, right_starting_angles)
-                    time.sleep(0.1)
-
-                right_rotation = client.getQuaternionFromEuler(right_rotation)
-                if right_rotation != save_rotation:
-                    right_hand.set_target(right_position, right_rotation)
-
-            if mode == 2: #left_translation
-                if is_right:
-                    is_right = not is_right
-                    temp2 = angles
-                    angles = prev_angles
-                    prev_angles = temp2
-                if key_state['up']:
-                    left_position[1] += step
-                if key_state['down']:
-                    left_position[1] -= step
-                if key_state['left']:
-                    left_position[0] -= step
-                if key_state['right']:
-                    left_position[0] += step
-                if key_state['1']:
-                    left_position[2] += step
-                if key_state['2']:
-                    left_position[2] -= step
-                left_hand.set_target(left_position, left_rotation)
-
-            if mode == 3:
-                left_rotation = list(client.getEulerFromQuaternion(left_rotation))
-                if key_state['left']:
-                    left_rotation[2] += ROTATION_INCREMENT  # Yaw left
-
-                if key_state['right']:
-                    left_rotation[2] -= ROTATION_INCREMENT  # Yaw right
-
-                if key_state['up']:
-                    left_rotation[0] += ROTATION_INCREMENT  # Pitch up
-
-                if key_state['down']:
-                    left_rotation[0] -= ROTATION_INCREMENT  # Pitch down
-
-                ''' if key_state['cylinder_grab']:
-                    # Initial target angles for each segment of the finger
-                    finger_base = 1.5
-                    finger_middle = 1.7
-                    finger_tip = 1.7
-
-                    # Indices corresponding to the base and tip joints of each finger
-                    base_indices = [1, 5, 9, 13, 17]
-                    tip_indices = [3, 7, 11, 15, 19]
-
-                    target_angles = [0] * 20
-
-                    # Set initial target angles for the fingers
-                    for idx in range(20):
-                        if idx in base_indices:
-                            target_angles[idx] = finger_base
-                        elif idx in tip_indices:
-                            target_angles[idx] = finger_tip
-                        else:
-                            target_angles[idx] = finger_middle
-                    angles = target_angles
-                    set_hand(target_angles)
-
-                    while True:
-                        all_angles_stable = True
-                        current_angles = right_hand.get_state()[3]
-                        tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                        for i in tip_indices:
-                            if tip_torque[i] > 0.45:
-                                # Adjust angles if the torque exceeds the threshold
-                                target_angles[i] = current_angles[i]  # tip
-                                target_angles[i - 1] = current_angles[i - 1]  # middle
-                                target_angles[i - 2] = current_angles[i - 2]  # base
-
-                                # Apply torque to maintain the grip
-                                angles = target_angles
-                                set_hand(target_angles)
-                        # Short delay to allow stabilization
-                        time.sleep(0.2)
-
-                        # Check if all angles are stable
-                        all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                        if all_angles_stable:
-                            break
-
-                        # Final delay to ensure full stabilization
-                        time.sleep(0.1)'''
-
-                if key_state['cylinder_grab']: #grabbing top of the bottle
-                    # Initial target angles for each segment of the finger
-                    finger_base = 1.5
-                    finger_middle = 1.7
-                    finger_tip = 1.7
-
-                    # Indices corresponding to the base and tip joints of each finger
-                    base_indices = [1, 5, 9, 13, 17]
-                    tip_indices = [3, 7, 11, 15, 19]
-
-                    target_angles = left_starting_angles[:]
-
-                    # Set initial target angles for the fingers
-                    for idx in range(20):
-                        if idx in base_indices:
-                            target_angles[idx] = 0
-                        elif idx in tip_indices:
-                            target_angles[idx] = finger_tip
-                        else:
-                            target_angles[idx] = finger_middle
-
-                    left_hand.set_target(left_position, left_rotation, target_angles)
-
-                    while True:
-                        all_angles_stable = True
-                        current_angles = right_hand.get_state()[3]
-                        tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                        for i in tip_indices:
-                            if tip_torque[i] > 0.4:
-                                # Adjust angles if the torque exceeds the threshold
-                                target_angles[i] = current_angles[i]  # tip
-                                target_angles[i - 1] = current_angles[i - 1]  # middle
-                                target_angles[i - 2] = current_angles[i - 2]  # base
-
-                                # Apply torque to maintain the grip
-                                left_hand.set_target(left_position, left_rotation, target_angles)
-                        # Short delay to allow stabilization
-                        time.sleep(0.2)
-
-                        # Check if all angles are stable
-                        all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                        if all_angles_stable:
-                            break
-
-                        # Final delay to ensure full stabilization
-                        time.sleep(0.1) #gr
-
-                if key_state['q']:  # releasing cylinder
-                    angles = left_starting_angles
-                    left_hand.set_target(left_position, left_rotation, left_starting_angles)
-                    time.sleep(0.1)
-
-
-                left_rotation = client.getQuaternionFromEuler(left_rotation)
-                left_hand.set_target(left_position, left_rotation)
-
-
-            '''
-            #After here, it doesnt matter which hand, it works for both hands
-            # holding cylinder position
-            if key_state['cylinder_grab']:
-                # Initial target angles for each segment of the finger
-                finger_base = 1.5
-                finger_middle = 1.7
-                finger_tip = 1.7
-
-                # Indices corresponding to the base and tip joints of each finger
-                base_indices = [1, 5, 9, 13, 17]
-                tip_indices = [3, 7, 11, 15, 19]
-
-                target_angles = [0] * 20
-
-                # Set initial target angles for the fingers
-                for idx in range(20):
-                    if idx in base_indices:
-                        target_angles[idx] = finger_base
-                    elif idx in tip_indices:
-                        target_angles[idx] = finger_tip
-                    else:
-                        target_angles[idx] = finger_middle
-                angles = target_angles
-                set_hand(target_angles)
-
-                while True:
-                    all_angles_stable = True
-                    current_angles = right_hand.get_state()[3]
-                    tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                    for i in tip_indices:
-                        if tip_torque[i] > 0.45:
-                            # Adjust angles if the torque exceeds the threshold
-                            target_angles[i] = current_angles[i]  # tip
-                            target_angles[i - 1] = current_angles[i - 1]  # middle
-                            target_angles[i - 2] = current_angles[i - 2]  # base
-
-                            # Apply torque to maintain the grip
-                            angles = target_angles
-                            set_hand(target_angles)
-                    # Short delay to allow stabilization
-                    time.sleep(0.2)
-
-                    # Check if all angles are stable
-                    all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                    if all_angles_stable:
-                        break
-
-                    # Final delay to ensure full stabilization
-                    time.sleep(0.1)
-
-            if key_state['q']: # releasing cylinder
-                target_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
-                if mode == 1 or mode == 2:
-                    target_angles[8] = 0.2
-                if mode == 2 or mode == 3:
-                    target_angles[8] = -0.2
-                angles = target_angles
-                set_hand(target_angles)
-
-            # Grabbing the lid
-            if key_state['top_grab']:
-                # Initial target angles for each segment of the finger
-                finger_base = 1.5
-                finger_middle = 1.7
-                finger_tip = 1.7
-
-                # Indices corresponding to the base and tip joints of each finger
-                base_indices = [1, 5, 9, 13, 17]
-                tip_indices = [3, 7, 11, 15, 19]
-
-                target_angles = [0] * 20
-
-                # Set initial target angles for the fingers
-                for idx in range(20):
-                    if idx in base_indices:
-                        target_angles[idx] = 0
-                    elif idx in tip_indices:
-                        target_angles[idx] = finger_tip
-                    else:
-                        target_angles[idx] = finger_middle
-
-                set_hand(target_angles)
-
-                while True:
-                    all_angles_stable = True
-                    current_angles = right_hand.get_state()[3]
-                    tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                    for i in tip_indices:
-                        if tip_torque[i] > 0.45:
-                            # Adjust angles if the torque exceeds the threshold
-                            target_angles[i] = current_angles[i]  # tip
-                            target_angles[i - 1] = current_angles[i - 1]  # middle
-                            target_angles[i - 2] = current_angles[i - 2]  # base
-
-                            # Apply torque to maintain the grip
-                            set_hand(target_angles)
-                    # Short delay to allow stabilization
-                    time.sleep(0.2)
-
-                    # Check if all angles are stable
-                    all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                    if all_angles_stable:
-                        break
-
-                    # Final delay to ensure full stabilization
-                    time.sleep(0.1)
-                time.sleep(10)
-
-            #individual finger contraction
-            if key_state['f']: # moving individual fingers
-                print('individual finger mode')
-                while True:
-                    if key_state['q']:
-                        break
-                    if key_state['1']:
-                        index += step * 5
-                    elif index > 0:
-                        index -= step * 5
-                    if key_state['2']:
-                        middle += step * 5
-                    elif middle > 0:
-                        middle -= step * 5
-                    if key_state['3']:
-                        pinky += step * 5
-                    elif pinky > 0:
-                        pinky -= step * 5
-                    if key_state['4']:
-                        ring += step * 5
-                    elif ring > 0:
-                        ring -= step * 5
-                    if key_state['5']:
-                        thumb += step * 5
-                    elif thumb > 0:
-                        thumb -= step * 5
-
-
-                    angles = [0] + [index] * 3 + [0] + [middle] * 3 + [0] + [pinky] * 3 + [0] + [
-                        ring] * 3 + [0] + [thumb] * 3
-
-                    # Update the hand's target position and rotation
-                    set_hand(angles)
-                    time.sleep(0.1)'''
-
-            # Small delay to prevent updating too quickly
-            #
-            # print("position:", right_hand.get_state()[3])
-            # print("torque:", right_hand.get_state()[5])
-            time.sleep(0.1)
-
-
-
-
-
-    except pb.error as err:
-        if str(err) not in ['Not connected to physics server.', 'Failed to read parameter.']:
-            raise
-
-
-if __name__ == '__main__':
-    main(parser.parse_args())
+import math
+import pybullet_data
+
+
+
+
+def drawInertiaBox(parentUid, parentLinkIndex, color):
+  dyn = p.getDynamicsInfo(parentUid, parentLinkIndex)
+  mass = dyn[0]
+  frictionCoeff = dyn[1]
+  inertia = dyn[2]
+  if (mass > 0):
+    Ixx = inertia[0]
+    Iyy = inertia[1]
+    Izz = inertia[2]
+    boxScaleX = 0.5 * math.sqrt(6 * (Izz + Iyy - Ixx) / mass)
+    boxScaleY = 0.5 * math.sqrt(6 * (Izz + Ixx - Iyy) / mass)
+    boxScaleZ = 0.5 * math.sqrt(6 * (Ixx + Iyy - Izz) / mass)
+
+    halfExtents = [boxScaleX, boxScaleY, boxScaleZ]
+    pts = [[halfExtents[0], halfExtents[1], halfExtents[2]],
+           [-halfExtents[0], halfExtents[1], halfExtents[2]],
+           [halfExtents[0], -halfExtents[1], halfExtents[2]],
+           [-halfExtents[0], -halfExtents[1], halfExtents[2]],
+           [halfExtents[0], halfExtents[1], -halfExtents[2]],
+           [-halfExtents[0], halfExtents[1], -halfExtents[2]],
+           [halfExtents[0], -halfExtents[1], -halfExtents[2]],
+           [-halfExtents[0], -halfExtents[1], -halfExtents[2]]]
+
+    p.addUserDebugLine(pts[0],
+                       pts[1],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[1],
+                       pts[3],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[3],
+                       pts[2],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[2],
+                       pts[0],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+
+    p.addUserDebugLine(pts[0],
+                       pts[4],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[1],
+                       pts[5],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[2],
+                       pts[6],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[3],
+                       pts[7],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+
+    p.addUserDebugLine(pts[4 + 0],
+                       pts[4 + 1],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[4 + 1],
+                       pts[4 + 3],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[4 + 3],
+                       pts[4 + 2],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+    p.addUserDebugLine(pts[4 + 2],
+                       pts[4 + 0],
+                       color,
+                       1,
+                       parentObjectUniqueId=parentUid,
+                       parentLinkIndex=parentLinkIndex)
+
+
+toeConstraint = True
+useMaximalCoordinates = False
+useRealTime = 0
+
+#the fixedTimeStep and numSolverIterations are the most important parameters to trade-off quality versus performance
+fixedTimeStep = 1. / 100
+numSolverIterations = 50
+
+if (useMaximalCoordinates):
+  fixedTimeStep = 1. / 500
+  numSolverIterations = 200
+
+speed = 10
+amplitude = 0.8
+jump_amp = 0.5
+maxForce = 3.5
+kneeFrictionForce = 0
+kp = 1
+kd = .5
+maxKneeForce = 1000
+
+physId = p.connect(p.SHARED_MEMORY_GUI)
+if (physId < 0):
+  p.connect(p.GUI)
+#p.resetSimulation()
+
+p.setAdditionalSearchPath(pybullet_data.getDataPath())
+angle = 0  # pick in range 0..0.2 radians
+orn = p.getQuaternionFromEuler([0, angle, 0])
+p.loadURDF("plane.urdf", [0, 0, 0], orn)
+p.setPhysicsEngineParameter(numSolverIterations=numSolverIterations)
+p.startStateLogging(p.STATE_LOGGING_GENERIC_ROBOT,
+                    "genericlogdata.bin",
+                    maxLogDof=16,
+                    logFlags=p.STATE_LOG_JOINT_TORQUES)
+p.setTimeOut(4000000)
+
+p.setGravity(0, 0, 0)
+p.setTimeStep(fixedTimeStep)
+
+orn = p.getQuaternionFromEuler([0, 0, 0.4])
+p.setRealTimeSimulation(0)
+quadruped = p.loadURDF("quadruped/minitaur_v1.urdf", [1, -1, .3],
+                       orn,
+                       useFixedBase=False,
+                       useMaximalCoordinates=useMaximalCoordinates,
+                       flags=p.URDF_USE_IMPLICIT_CYLINDER)
+nJoints = p.getNumJoints(quadruped)
+
+jointNameToId = {}
+for i in range(nJoints):
+  jointInfo = p.getJointInfo(quadruped, i)
+  jointNameToId[jointInfo[1].decode('UTF-8')] = jointInfo[0]
+
+motor_front_rightR_joint = jointNameToId['motor_front_rightR_joint']
+motor_front_rightL_joint = jointNameToId['motor_front_rightL_joint']
+knee_front_rightL_link = jointNameToId['knee_front_rightL_link']
+hip_front_rightR_link = jointNameToId['hip_front_rightR_link']
+knee_front_rightR_link = jointNameToId['knee_front_rightR_link']
+motor_front_rightL_link = jointNameToId['motor_front_rightL_link']
+motor_front_leftR_joint = jointNameToId['motor_front_leftR_joint']
+hip_front_leftR_link = jointNameToId['hip_front_leftR_link']
+knee_front_leftR_link = jointNameToId['knee_front_leftR_link']
+motor_front_leftL_joint = jointNameToId['motor_front_leftL_joint']
+motor_front_leftL_link = jointNameToId['motor_front_leftL_link']
+knee_front_leftL_link = jointNameToId['knee_front_leftL_link']
+motor_back_rightR_joint = jointNameToId['motor_back_rightR_joint']
+hip_rightR_link = jointNameToId['hip_rightR_link']
+knee_back_rightR_link = jointNameToId['knee_back_rightR_link']
+motor_back_rightL_joint = jointNameToId['motor_back_rightL_joint']
+motor_back_rightL_link = jointNameToId['motor_back_rightL_link']
+knee_back_rightL_link = jointNameToId['knee_back_rightL_link']
+motor_back_leftR_joint = jointNameToId['motor_back_leftR_joint']
+hip_leftR_link = jointNameToId['hip_leftR_link']
+knee_back_leftR_link = jointNameToId['knee_back_leftR_link']
+motor_back_leftL_joint = jointNameToId['motor_back_leftL_joint']
+motor_back_leftL_link = jointNameToId['motor_back_leftL_link']
+knee_back_leftL_link = jointNameToId['knee_back_leftL_link']
+
+#fixtorso = p.createConstraint(-1,-1,quadruped,-1,p.JOINT_FIXED,[0,0,0],[0,0,0],[0,0,0])
+
+motordir = [-1, -1, -1, -1, 1, 1, 1, 1]
+halfpi = 1.57079632679
+twopi = 4 * halfpi
+kneeangle = -2.1834
+
+dyn = p.getDynamicsInfo(quadruped, -1)
+mass = dyn[0]
+friction = dyn[1]
+localInertiaDiagonal = dyn[2]
+
+print("localInertiaDiagonal", localInertiaDiagonal)
+
+#this is a no-op, just to show the API
+p.changeDynamics(quadruped, -1, localInertiaDiagonal=localInertiaDiagonal)
+
+#for i in range (nJoints):
+#	p.changeDynamics(quadruped,i,localInertiaDiagonal=[0.000001,0.000001,0.000001])
+
+drawInertiaBox(quadruped, -1, [1, 0, 0])
+#drawInertiaBox(quadruped,motor_front_rightR_joint, [1,0,0])
+
+for i in range(nJoints):
+  drawInertiaBox(quadruped, i, [0, 1, 0])
+
+if (useMaximalCoordinates):
+  steps = 400
+  for aa in range(steps):
+    p.setJointMotorControl2(quadruped, motor_front_leftL_joint, p.POSITION_CONTROL,
+                            motordir[0] * halfpi * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, motor_front_leftR_joint, p.POSITION_CONTROL,
+                            motordir[1] * halfpi * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, motor_back_leftL_joint, p.POSITION_CONTROL,
+                            motordir[2] * halfpi * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, motor_back_leftR_joint, p.POSITION_CONTROL,
+                            motordir[3] * halfpi * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, motor_front_rightL_joint, p.POSITION_CONTROL,
+                            motordir[4] * halfpi * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, motor_front_rightR_joint, p.POSITION_CONTROL,
+                            motordir[5] * halfpi * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, motor_back_rightL_joint, p.POSITION_CONTROL,
+                            motordir[6] * halfpi * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, motor_back_rightR_joint, p.POSITION_CONTROL,
+                            motordir[7] * halfpi * float(aa) / steps)
+
+    p.setJointMotorControl2(quadruped, knee_front_leftL_link, p.POSITION_CONTROL,
+                            motordir[0] * (kneeangle + twopi) * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, knee_front_leftR_link, p.POSITION_CONTROL,
+                            motordir[1] * kneeangle * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, knee_back_leftL_link, p.POSITION_CONTROL,
+                            motordir[2] * kneeangle * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, knee_back_leftR_link, p.POSITION_CONTROL,
+                            motordir[3] * (kneeangle + twopi) * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, knee_front_rightL_link, p.POSITION_CONTROL,
+                            motordir[4] * (kneeangle) * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, knee_front_rightR_link, p.POSITION_CONTROL,
+                            motordir[5] * (kneeangle + twopi) * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, knee_back_rightL_link, p.POSITION_CONTROL,
+                            motordir[6] * (kneeangle + twopi) * float(aa) / steps)
+    p.setJointMotorControl2(quadruped, knee_back_rightR_link, p.POSITION_CONTROL,
+                            motordir[7] * kneeangle * float(aa) / steps)
+
+    p.stepSimulation()
+    #time.sleep(fixedTimeStep)
+else:
+
+  p.resetJointState(quadruped, motor_front_leftL_joint, motordir[0] * halfpi)
+  p.resetJointState(quadruped, knee_front_leftL_link, motordir[0] * kneeangle)
+  p.resetJointState(quadruped, motor_front_leftR_joint, motordir[1] * halfpi)
+  p.resetJointState(quadruped, knee_front_leftR_link, motordir[1] * kneeangle)
+
+  p.resetJointState(quadruped, motor_back_leftL_joint, motordir[2] * halfpi)
+  p.resetJointState(quadruped, knee_back_leftL_link, motordir[2] * kneeangle)
+  p.resetJointState(quadruped, motor_back_leftR_joint, motordir[3] * halfpi)
+  p.resetJointState(quadruped, knee_back_leftR_link, motordir[3] * kneeangle)
+
+  p.resetJointState(quadruped, motor_front_rightL_joint, motordir[4] * halfpi)
+  p.resetJointState(quadruped, knee_front_rightL_link, motordir[4] * kneeangle)
+  p.resetJointState(quadruped, motor_front_rightR_joint, motordir[5] * halfpi)
+  p.resetJointState(quadruped, knee_front_rightR_link, motordir[5] * kneeangle)
+
+  p.resetJointState(quadruped, motor_back_rightL_joint, motordir[6] * halfpi)
+  p.resetJointState(quadruped, knee_back_rightL_link, motordir[6] * kneeangle)
+  p.resetJointState(quadruped, motor_back_rightR_joint, motordir[7] * halfpi)
+  p.resetJointState(quadruped, knee_back_rightR_link, motordir[7] * kneeangle)
+
+#p.getNumJoints(1)
+
+if (toeConstraint):
+  cid = p.createConstraint(quadruped, knee_front_leftR_link, quadruped, knee_front_leftL_link,
+                           p.JOINT_POINT2POINT, [0, 0, 0], [0, 0.005, 0.1], [0, 0.01, 0.1])
+  p.changeConstraint(cid, maxForce=maxKneeForce)
+  cid = p.createConstraint(quadruped, knee_front_rightR_link, quadruped, knee_front_rightL_link,
+                           p.JOINT_POINT2POINT, [0, 0, 0], [0, 0.005, 0.1], [0, 0.01, 0.1])
+  p.changeConstraint(cid, maxForce=maxKneeForce)
+  cid = p.createConstraint(quadruped, knee_back_leftR_link, quadruped, knee_back_leftL_link,
+                           p.JOINT_POINT2POINT, [0, 0, 0], [0, 0.005, 0.1], [0, 0.01, 0.1])
+  p.changeConstraint(cid, maxForce=maxKneeForce)
+  cid = p.createConstraint(quadruped, knee_back_rightR_link, quadruped, knee_back_rightL_link,
+                           p.JOINT_POINT2POINT, [0, 0, 0], [0, 0.005, 0.1], [0, 0.01, 0.1])
+  p.changeConstraint(cid, maxForce=maxKneeForce)
+
+if (1):
+  p.setJointMotorControl(quadruped, knee_front_leftL_link, p.VELOCITY_CONTROL, 0,
+                         kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_front_leftR_link, p.VELOCITY_CONTROL, 0,
+                         kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_front_rightL_link, p.VELOCITY_CONTROL, 0,
+                         kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_front_rightR_link, p.VELOCITY_CONTROL, 0,
+                         kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_back_leftL_link, p.VELOCITY_CONTROL, 0, kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_back_leftR_link, p.VELOCITY_CONTROL, 0, kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_back_leftL_link, p.VELOCITY_CONTROL, 0, kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_back_leftR_link, p.VELOCITY_CONTROL, 0, kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_back_rightL_link, p.VELOCITY_CONTROL, 0,
+                         kneeFrictionForce)
+  p.setJointMotorControl(quadruped, knee_back_rightR_link, p.VELOCITY_CONTROL, 0,
+                         kneeFrictionForce)
+
+p.setGravity(0, 0, -10)
+
+legnumbering = [
+    motor_front_leftL_joint, motor_front_leftR_joint, motor_back_leftL_joint,
+    motor_back_leftR_joint, motor_front_rightL_joint, motor_front_rightR_joint,
+    motor_back_rightL_joint, motor_back_rightR_joint
+]
+
+for i in range(8):
+  print(legnumbering[i])
+#use the Minitaur leg numbering
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[0],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[0] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[1],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[1] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[2],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[2] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[3],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[3] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[4],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[4] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[5],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[5] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[6],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[6] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+p.setJointMotorControl2(bodyIndex=quadruped,
+                        jointIndex=legnumbering[7],
+                        controlMode=p.POSITION_CONTROL,
+                        targetPosition=motordir[7] * 1.57,
+                        positionGain=kp,
+                        velocityGain=kd,
+                        force=maxForce)
+#stand still
+p.setRealTimeSimulation(useRealTime)
+
+t = 0.0
+t_end = t + 15
+ref_time = time.time()
+while (t < t_end):
+  p.setGravity(0, 0, -10)
+  if (useRealTime):
+    t = time.time() - ref_time
+  else:
+    t = t + fixedTimeStep
+  if (useRealTime == 0):
+    p.stepSimulation()
+    time.sleep(fixedTimeStep)
+
+print("quadruped Id = ")
+print(quadruped)
+p.saveWorld("quadru.py")
+logId = p.startStateLogging(p.STATE_LOGGING_MINITAUR, "quadrupedLog.bin", [quadruped])
+
+#jump
+t = 0.0
+t_end = t + 100
+i = 0
+ref_time = time.time()
+
+while (1):
+  if (useRealTime):
+    t = time.time() - ref_time
+  else:
+    t = t + fixedTimeStep
+  if (True):
+
+    target = math.sin(t * speed) * jump_amp + 1.57
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[0],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[0] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[1],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[1] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[2],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[2] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[3],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[3] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[4],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[4] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[5],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[5] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[6],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[6] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+    p.setJointMotorControl2(bodyIndex=quadruped,
+                            jointIndex=legnumbering[7],
+                            controlMode=p.POSITION_CONTROL,
+                            targetPosition=motordir[7] * target,
+                            positionGain=kp,
+                            velocityGain=kd,
+                            force=maxForce)
+
+  if (useRealTime == 0):
+    p.stepSimulation()
+    time.sleep(fixedTimeStep)
