@@ -122,12 +122,13 @@ def main(args):
     pb.setAdditionalSearchPath("mano_pybullet")
 
     # Load flask and lid URDFs
-    flask_position = [0, 0, 0.2]
-    lid_position = [0, 0, 0.5]  # Adjust based on the actual size of the flask and lid
+    flask_position = [0, 0, 0.1]
+    lid_position = [0, 0, 0.15]  # Adjust based on the actual size of the flask and lid
     flask_orientation = client.getQuaternionFromEuler([0, 0, 0])
-    # lid_orientation = client.getQuaternionFromEuler([0, 0, 0])
+    lid_orientation = client.getQuaternionFromEuler([0, 0, 0])
 
     flask_id = client.loadURDF("models/flask.urdf", flask_position, flask_orientation)
+    lid_id = client.loadURDF("models/lid.urdf", lid_position, lid_orientation)
     client.changeDynamics(flask_id, -1, mass=2, lateralFriction=2.0, spinningFriction=1.0,
                           localInertiaDiagonal=[0.015, 0.015, 0.015])
     list_of_objects.append(flask_id)
@@ -280,9 +281,46 @@ def main(args):
     right_constraint_id = None
     left_constraint_id = None
 
-    def flask_behavior(client):
+    def flask_behavior(client, flask_id, lid_id):
+        # Parameters for creating a revolute joint (twist_joint)
+        twist_joint_params = {
+            'parentBodyUniqueId': flask_id,
+            'parentLinkIndex': -1,  # Corrected to -1 for the base link
+            'childBodyUniqueId': lid_id,
+            'childLinkIndex': -1,  # Corrected to -1 assuming the lid is treated as a separate body
+            'jointType': pb.JOINT_REVOLUTE,
+            'jointAxis': [0, 0, 1],
+            'parentFramePosition': [0, 0, 0.11],
+            'childFramePosition': [0, 0, 0],
+            'parentFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0]),
+            'childFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0])
+        }
+
+        # Create the twist_joint using the corrected parameters
+        twist_joint_id = client.createConstraint(**twist_joint_params)
+
+        # Parameters for creating a prismatic joint (lift_joint)
+        lift_joint_params = {
+            'parentBodyUniqueId': flask_id,
+            'parentLinkIndex': 0,  # Assuming the intermediate link is the first link
+            'childBodyUniqueId': lid_id,
+            'childLinkIndex': 0,  # Assuming the lid is the second link
+            'jointType': pb.JOINT_PRISMATIC,
+            'jointAxis': [0, 0, 1],
+            'parentFramePosition': [0, 0, 0.02],
+            'childFramePosition': [0, 0, 0],
+            'parentFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0]),
+            'childFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0]),
+            'maxForce': 0.1,
+            'maxVelocity': 0.1
+        }
+
+        # Create the lift_joint
+        lift_joint_id = client.createConstraint(**lift_joint_params)
+
         twist_joint_index = 0  # Assuming the first joint is the twist_joint
         lift_joint_index = 1  # Assuming the second joint is the lift_joint
+        separation_height = 0.05  # Height at which the lid separates from the flask
 
         # Get the current angle of the twist_joint
         twist_joint_state = client.getJointState(flask_id, twist_joint_index)
@@ -294,11 +332,19 @@ def main(args):
         lift_joint_target_position = twist_joint_angle * scaling_factor
 
         # Ensure the target position is within the allowed range of the lift_joint
-        lift_joint_target_position = max(0, min(lift_joint_target_position, 0.05))
+        lift_joint_target_position = max(0, min(lift_joint_target_position, 0.06))
 
         # Set the target position of the lift_joint based on the twist_joint_angle
         client.setJointMotorControl2(flask_id, lift_joint_index, client.POSITION_CONTROL,
                                      targetPosition=lift_joint_target_position)
+        # Check the position of the lift_joint
+        _, lift_joint_position, _, _ = pb.getJointState(flask_id,
+                                                        jointIndex=1)  # Assuming jointIndex=1 is the lift_joint
+
+        if lift_joint_position >= separation_height:
+            client.removeConstraint(lift_joint_id)
+            client.removeConstraint(twist_joint_id)
+            print("Lid separated from the flask.")
     # Create a constraint between the hand and the object
     def create_grasp_constraint(client, hand_id, hand_link, object_id, pivotInHand, pivotInObject, ornHand,
                                 ornObject):
@@ -419,7 +465,8 @@ def main(args):
 
     try:
         while client.isConnected():
-            flask_behavior(client)
+            time.sleep(2.0)
+            flask_behavior(client, flask_id, lid_id)
 
             # Movement mode translation or rotation
             ################# MODES ####################

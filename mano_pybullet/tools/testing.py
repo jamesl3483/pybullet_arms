@@ -118,9 +118,9 @@ def main(args):
     # lid_orientation = client.getQuaternionFromEuler([0, 0, 0])
 
     flask_id = client.loadURDF("models/flask.urdf", flask_position, flask_orientation)
+    lid_id = client.loadURDF("models/lid.urdf", lid_position, lid_position)
     client.changeDynamics(flask_id, -1, mass=2, lateralFriction=2.0, spinningFriction=1.0,
                           localInertiaDiagonal=[0.015, 0.015, 0.015])
-
 
 
     ###### When Creating objects make sure to put them in a list of ids                            #############
