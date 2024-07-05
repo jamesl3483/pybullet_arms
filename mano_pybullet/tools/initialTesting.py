@@ -107,6 +107,12 @@ def main(args):
     client.setAdditionalSearchPath(pybullet_data.getDataPath())
     planeId = client.loadURDF("plane.urdf")
 
+
+    ###### When Creating objects make sure to put them in a list of ids                            #############
+    ###### This is for the grabbing mechanism which will see which objects it is most connected to #############
+
+
+    list_of_objects = []
     # Cylinder parameters
     cylinder_radius = 0.04
     cylinder_height = 0.25
@@ -124,6 +130,8 @@ def main(args):
     cylinder_body = client.createMultiBody(baseMass=cylinder_mass, baseCollisionShapeIndex=cylinder_id,
                                       baseVisualShapeIndex=cylinder_visual_id, basePosition=cylinder_position,
                                       baseOrientation=cylinder_orientation)
+
+    list_of_objects.append(cylinder_body)
 
     # # Adjust the dynamics of the object
     # client.changeDynamics(cylinder_body, -1, mass=cylinder_mass, lateralFriction=2.0, spinningFriction=1.0,
@@ -248,44 +256,152 @@ def main(args):
     #For saving state when switching hands
     prev_grabbing_position = False
     prev_holding = False
-    prev_angles = angles
-
+    prev_angles = angles[:]
+    target_angles = right_starting_angles[:]
 
     ######################################
     mode = 0
     step = 0.01  # Step size for position adjustments
     ROTATION_INCREMENT = 0.05
     is_right = False
-    constraint_id = None
+    right_constraint_id = None
+    left_constraint_id = None
 
-    def is_hand_stable():
+    def create_grasp_constraint(client, hand_id, hand_link, object_id, pivotInHand, pivotInObject, ornHand,
+                                ornObject):
+        constraint_id = client.createConstraint(
+            parentBodyUniqueId=hand_id,
+            parentLinkIndex=hand_link,
+            childBodyUniqueId=object_id,
+            childLinkIndex=-1,
+            jointType=pb.JOINT_FIXED,
+            jointAxis=[0, 0, 0],
+            parentFramePosition=pivotInHand,
+            childFramePosition=pivotInObject,
+            parentFrameOrientation=ornHand,
+            childFrameOrientation=ornObject
+        )
+
+        # Set ERP and CFM for better stability
+        client.changeConstraint(constraint_id, erp=0.2, maxForce=500)
+        return constraint_id
+
+    # Check if we have contact and create a constraint
+    def check_contact(client, hand_id, body_ids):
+        for body_id in body_ids:
+            contacts = client.getContactPoints(hand_id, body_id)
+            for contact in contacts:
+                if contact[8] < 0.01:  # Check if contact distance is less than 1cm
+                    return body_id, contacts
+        return None, None
+
+    # Stabilize the hand to ensure it holds the object without jittering
+    ''' def stabilize_hand(hand):
+        # Initial target angles for each segment of the finger
+        finger_base = 1.0
+        finger_middle = 0.7
+        finger_tip = 0.5
+
+        # Indices corresponding to the base and tip joints of each finger
+        base_indices = [1, 5, 9, 13]
+        middle_indices = [2, 6, 10, 14]
+        tip_indices = [3, 7, 11, 15]
+
+        target_angles = right_starting_angles[:]
+
         while True:
+            # Set initial target angles for the fingers
+            for idx in range(20):
+                if idx in base_indices:
+                    if target_angles[idx] == finger_base:
+                        continue
+                    target_angles[idx] += 0.1
+                elif idx in tip_indices:
+                    if target_angles[idx] == finger_tip:
+                        continue
+                    target_angles[idx] += 0.1
+                elif idx in middle_indices:
+                    if target_angles[idx] == finger_middle:
+                        continue
+                    target_angles[idx] += 0.1
+
+            time.sleep(0.2)
+            right_hand.set_target(right_position, right_rotation, target_angles)
+            """Ensure the joints are not oscillating."""
+
             all_angles_stable = True
-            if is_right:
-                for i, angle in enumerate(right_hand.get_state()[4]):
-                    if abs(angle) > 0.01:
-                        all_angles_stable = False
-            else:
-                for i, angle in enumerate(left_hand.get_state()[4]):
-                    if abs(angle) > 0.01:
-                        all_angles_stable = False
-            if all_angles_stable:
+            current_angles = hand.get_state()[3]
+            tip_torque = hand.get_state()[4]  # Assuming this stores angle changes akin to velocities
+            time.sleep(0.05)
+            for i in tip_indices:
+                if tip_torque[i] < 0.1:
+                    tip_indices.remove(i)
+                    # Adjust angles if the torque exceeds the threshold
+                    target_angles[i] = current_angles[i]  # tip
+                    target_angles[i - 1] = current_angles[i - 1]  # middle
+                    target_angles[i - 2] = current_angles[i - 2]  # base
+
+            # Apply torque to maintain the grip
+            hand.set_target(left_position, left_rotation, target_angles)
+
+            if len(tip_indices) == 0:
+                break'''
+
+    def curl_fingers_until_contact(hand, position, rotation, starting_angles):
+        finger_base = 1.0
+        finger_middle = 0.7
+        finger_tip = 0.5
+
+        base_indices = [1, 5, 9, 13]
+        middle_indices = [2, 6, 10, 14]
+        tip_indices = [3, 7, 11, 15]
+
+        target_angles = starting_angles[:]
+
+        while True:
+            # Set initial target angles for the fingers
+            for idx in range(20):
+                if idx in base_indices:
+                    target_angles[idx] = min(target_angles[idx] + 0.1, finger_base)
+                elif idx in middle_indices:
+                    target_angles[idx] = min(target_angles[idx] + 0.1, finger_middle)
+                elif idx in tip_indices:
+                    target_angles[idx] = min(target_angles[idx] + 0.1, finger_tip)
+
+            hand.set_target(position, rotation, target_angles)
+
+            time.sleep(0.2)  # Adjust delay as necessary
+
+            # Check if angles are stable and contact is made
+            current_angles = hand.get_state()[3]
+            tip_torque = hand.get_state()[5]
+            contact_made = False
+
+            for i in tip_indices:
+                if tip_torque[i] > 0.1 and check_contact(client, hand.body_id, list_of_objects):
+                    contact_made = True
+                    target_angles[i] = current_angles[i]  # tip
+                    target_angles[i - 1] = current_angles[i - 1]  # middle
+                    target_angles[i - 2] = current_angles[i - 2]  # base
+
+            if contact_made:
+                for idx in tip_indices:
+                    if idx >= len(target_angles):
+                        continue
+                    # Once contact is made, adjust to maintain grip
+                    target_angles[idx] = current_angles[idx]  # tip
+                    target_angles[idx - 1] = current_angles[idx - 1]  # middle
+                    target_angles[idx - 2] = current_angles[idx - 2]  # base
+
+                hand.set_target(position, rotation, target_angles)
                 break
 
-            time.sleep(0.05)
-
-    def set_hand(target_angles):
-        if is_right:
-            right_hand.set_target(right_position, right_rotation, target_angles)
-        else:
-            left_hand.set_target(left_position, left_rotation, target_angles)
-
+            time.sleep(0.1)  # Small delay to prevent rapid updates
+        return target_angles
 
     try:
         while client.isConnected():
             # Movement mode translation or rotation
-
-
             ################# MODES ####################
             # 0 = right_translation, 1 = right_grab and 2 degree rotation
             # 2 = left_translation, 3 = left_grab and 2 degree rotation
@@ -296,11 +412,12 @@ def main(args):
             ########################################
 
             if mode == 0: #right_translation
+                print("mode 0")
                 if not is_right:
                     is_right = not is_right
-                    temp2 = angles
-                    angles = prev_angles
-                    prev_angles = temp2
+                    temp2 = angles[:]
+                    angles = prev_angles[:]
+                    prev_angles = temp2[:]
 
                 if key_state['up']:
                    right_position[1] += step
@@ -314,9 +431,12 @@ def main(args):
                    right_position[2] += step
                 if key_state['2']:
                    right_position[2] -= step
-                right_hand.set_target(right_position, right_rotation)
+                right_hand.set_target(right_position, right_rotation, target_angles)
+
+
 
             if mode == 1: # right_grabbing and rotation
+                print("mode 1")
                 save_rotation = right_rotation
                 right_rotation = list(client.getEulerFromQuaternion(right_rotation))
                 if key_state['left']:
@@ -328,142 +448,70 @@ def main(args):
                 if key_state['down']:
                     right_rotation[0] -= ROTATION_INCREMENT  # Pitch down
 
-                def create_grasp_constraint(client, hand_id, hand_link, object_id, pivotInHand, pivotInObject, ornHand,
-                                            ornObject):
-                    constraint_id = client.createConstraint(
-                        parentBodyUniqueId=hand_id,
-                        parentLinkIndex=hand_link,
-                        childBodyUniqueId=object_id,
-                        childLinkIndex=-1,
-                        jointType=pb.JOINT_FIXED,
-                        jointAxis=[0, 0, 0],
-                        parentFramePosition=pivotInHand,
-                        childFramePosition=pivotInObject,
-                        parentFrameOrientation=ornHand,
-                        childFrameOrientation=ornObject
-                    )
-
-                    # Set ERP and CFM for better stability
-                    client.changeConstraint(constraint_id, erp=0.2, maxForce=500)
-                    return constraint_id
-
                 if key_state['cylinder_grab']:
                     # Check if we have contact and create a constraint
-                    def check_contact(client, hand_id, object_id):
-                        contacts = client.getContactPoints(hand_id, object_id)
-                        for contact in contacts:
-                            if contact[8] < 0.01:  # Check if contact distance is less than 1cm
-                                return True
-                        return False
 
-                    if check_contact(pb, right_hand.body_id, cylinder_body):
-                        print("Contact made with cylinder, grasping now.")
-                        contacts = pb.getContactPoints(right_hand.body_id, cylinder_body)
-                        # target_angles = right_hand.get_state()[3]
-                        if contacts:
-                            contact = contacts[0]
-                            link_index = contact[3]  # Get link index from the contact point
-                            pivotHand = contact[6]  # Contact point on the hand in its local frame
-                            pivot = contact[5]  # Contact point on the object in its local frame
+                    object, contacts = check_contact(pb, right_hand.body_id, list_of_objects)
+                    if contacts:
+                        contact = contacts[0]
+                        link_index = contact[3]  # Get link index from the contact point
+                        pivotHand = contact[6]  # Contact point on the hand in its local frame
+                        pivot = contact[5]  # Contact point on the object in its local frame
 
-                            # Get world positions and orientations
-                            hand_world_position, hand_world_orientation = pb.getLinkState(right_hand.body_id,
-                                                                                          link_index)[0:2]
-                            object_world_position, object_world_orientation = pb.getBasePositionAndOrientation(
-                                cylinder_body)
+                        # Get world positions and orientations
+                        hand_world_position, hand_world_orientation = pb.getLinkState(right_hand.body_id,
+                                                                                      link_index)[0:2]
+                        object_world_position, object_world_orientation = pb.getBasePositionAndOrientation(
+                            object)
 
-                            # Convert world coordinates to local coordinates for the hand
-                            parent_frame_position, parent_frame_orientation = pb.invertTransform(hand_world_position,
-                                                                                                 hand_world_orientation)
-                            pivotInHand, _ = pb.multiplyTransforms(
-                                parent_frame_position,
-                                parent_frame_orientation,
-                                pivot,
-                                [0, 0, 0, 1]
-                            )
+                        # Convert world coordinates to local coordinates for the hand
+                        parent_frame_position, parent_frame_orientation = pb.invertTransform(hand_world_position,
+                                                                                             hand_world_orientation)
+                        pivotInHand, _ = pb.multiplyTransforms(
+                            parent_frame_position,
+                            parent_frame_orientation,
+                            pivot,
+                            [0, 0, 0, 1]
+                        )
 
-                            # Convert world coordinates to local coordinates for the object
-                            child_frame_position, child_frame_orientation = pb.invertTransform(object_world_position,
-                                                                                               object_world_orientation)
-                            pivotInObject, _ = pb.multiplyTransforms(
-                                child_frame_position,
-                                child_frame_orientation,
-                                pivot,
-                                [0, 0, 0, 1]
-                            )
+                        # Convert world coordinates to local coordinates for the object
+                        child_frame_position, child_frame_orientation = pb.invertTransform(object_world_position,
+                                                                                           object_world_orientation)
+                        pivotInObject, _ = pb.multiplyTransforms(
+                            child_frame_position,
+                            child_frame_orientation,
+                            pivot,
+                            [0, 0, 0, 1]
+                        )
 
-                            # Create the constraint
-                            cid = create_grasp_constraint(pb, right_hand.body_id, link_index,
-                                                          cylinder_body, pivotInHand, pivotInObject,
-                                                          parent_frame_orientation, child_frame_orientation)
+                        # Create the constraint
+                        cid = create_grasp_constraint(pb, right_hand.body_id, link_index,
+                                                      object, pivotInHand, pivotInObject,
+                                                      parent_frame_orientation, child_frame_orientation)
 
-                            print(f"Constraint created at link index {link_index}")
-                            constraint_id = cid  # Store the constraint ID for future operations
+                        print(f"Constraint created at link index {link_index}")
+                        right_constraint_id = cid  # Store the constraint ID for future operations
 
 
-
-                    # Initial target angles for each segment of the finger
-                    finger_base = 1.0
-                    finger_middle = 0.7
-                    finger_tip = 0.5
-
-                    # Indices corresponding to the base and tip joints of each finger
-                    base_indices = [1, 5, 9, 13]
-                    middle_indices = [2, 6, 10, 14, 18]
-                    tip_indices = [3, 7, 11, 15, 19]
-
-                    target_angles = right_starting_angles[:]
-
-                    # Set initial target angles for the fingers
-                    for idx in range(20):
-                        if idx in base_indices:
-                            target_angles[idx] = finger_base
-                        elif idx in tip_indices:
-                            target_angles[idx] = finger_tip
-                        else:
-                            target_angles[idx] = finger_middle
-
-                    angles = target_angles
-                    right_hand.set_target(right_position, right_rotation, target_angles)
-                    time.sleep(0.2)
-
-
-
-
-                    # Stabilize the hand to ensure it holds the object without jittering
-                    def stabilize_hand(hand):
-                        """Ensure the joints are not oscillating."""
-                        while True:
-                            # hand.set_target(right_position, right_rotation, target_angles)
-                            all_angles_stable = True
-                            for angle in hand.get_state()[4]:  # Get angular velocities
-                                if abs(angle) > 0.01:  # Threshold for considering stable
-                                    all_angles_stable = False
-                            if all_angles_stable:
-                                break
-                            time.sleep(0.05)
-
-                    stabilize_hand(right_hand)
+                    target_angles = curl_fingers_until_contact( right_hand, right_position, right_rotation, target_angles)
 
                 # If the `q` key is pressed, remove the constraint
-                if key_state['q'] and constraint_id:
-                    pb.removeConstraint(constraint_id)
-                    print("Constraint removed.")
-                    constraint_id = None  # Reset the constraint ID
+                if key_state['q'] and right_constraint_id:
+                    pb.removeConstraint(right_constraint_id)
+                    right_constraint_id = None  # Reset the constraint ID
                     angles = right_starting_angles
                     right_hand.set_target(right_position, right_rotation, angles)
 
-
-
                 right_rotation = client.getQuaternionFromEuler(right_rotation)
-                right_hand.set_target(right_position, right_rotation)
+                right_hand.set_target(right_position, right_rotation, target_angles)
 
             if mode == 2: #left_translation
+                print("mode 2")
                 if is_right:
                     is_right = not is_right
-                    temp2 = angles
-                    angles = prev_angles
-                    prev_angles = temp2
+                    temp2 = angles[:]
+                    angles = prev_angles[:]
+                    prev_angles = temp2[:]
                 if key_state['up']:
                     left_position[1] += step
                 if key_state['down']:
@@ -476,9 +524,11 @@ def main(args):
                     left_position[2] += step
                 if key_state['2']:
                     left_position[2] -= step
-                left_hand.set_target(left_position, left_rotation)
+                left_hand.set_target(left_position, left_rotation, angles)
+                right_hand.set_target(right_position, right_rotation, prev_angles)
 
             if mode == 3:
+                print("mode 3")
                 left_rotation = list(client.getEulerFromQuaternion(left_rotation))
                 if key_state['left']:
                     left_rotation[2] += ROTATION_INCREMENT  # Yaw left
@@ -492,267 +542,85 @@ def main(args):
                 if key_state['down']:
                     left_rotation[0] -= ROTATION_INCREMENT  # Pitch down
 
-                ''' if key_state['cylinder_grab']:
+                if key_state['cylinder_grab']:
+                    object, contacts = check_contact(pb, left_hand.body_id, list_of_objects)
+                    if contacts:
+                        contact = contacts[0]
+                        link_index = contact[3]  # Get link index from the contact point
+                        pivotHand = contact[6]  # Contact point on the hand in its local frame
+                        pivot = contact[5]  # Contact point on the object in its local frame
+
+                        # Get world positions and orientations
+                        hand_world_position, hand_world_orientation = pb.getLinkState(left_hand.body_id,
+                                                                                      link_index)[0:2]
+                        object_world_position, object_world_orientation = pb.getBasePositionAndOrientation(
+                            object)
+
+                        # Convert world coordinates to local coordinates for the hand
+                        parent_frame_position, parent_frame_orientation = pb.invertTransform(hand_world_position,
+                                                                                             hand_world_orientation)
+                        pivotInHand, _ = pb.multiplyTransforms(
+                            parent_frame_position,
+                            parent_frame_orientation,
+                            pivot,
+                            [0, 0, 0, 1]
+                        )
+
+                        # Convert world coordinates to local coordinates for the object
+                        child_frame_position, child_frame_orientation = pb.invertTransform(object_world_position,
+                                                                                           object_world_orientation)
+                        pivotInObject, _ = pb.multiplyTransforms(
+                            child_frame_position,
+                            child_frame_orientation,
+                            pivot,
+                            [0, 0, 0, 1]
+                        )
+
+                        # Create the constraint
+                        cid = create_grasp_constraint(pb, left_hand.body_id, link_index,
+                                                      object, pivotInHand, pivotInObject,
+                                                      parent_frame_orientation, child_frame_orientation)
+
+                        print(f"Constraint created at link index {link_index}")
+                        left_constraint_id = cid  # Store the constraint ID for future operations
+
                     # Initial target angles for each segment of the finger
-                    finger_base = 1.5
-                    finger_middle = 1.7
-                    finger_tip = 1.7
+                    finger_base = 1.0
+                    finger_middle = 0.7
+                    finger_tip = 0.5
 
-                    # Indices corresponding to the base and tip joints of each finger
-                    base_indices = [1, 5, 9, 13, 17]
-                    tip_indices = [3, 7, 11, 15, 19]
+                    # # Indices corresponding to the base and tip joints of each finger
+                    # base_indices = [1, 5, 9, 13]
+                    # middle_indices = [2, 6, 10, 14, 18]
+                    # tip_indices = [3, 7, 11, 15, 19]
+                    #
+                    # target_angles = right_starting_angles[:]
+                    #
+                    # # Set initial target angles for the fingers
+                    # for idx in range(20):
+                    #     if idx in base_indices:
+                    #         target_angles[idx] = finger_base
+                    #     elif idx in tip_indices:
+                    #         target_angles[idx] = finger_tip
+                    #     else:
+                    #         target_angles[idx] = finger_middle
+                    #
+                    # angles = target_angles
+                    # right_hand.set_target(right_position, right_rotation, target_angles)
+                    # time.sleep(0.2)
+                    curl_fingers_until_contact(left_hand)
 
-                    target_angles = [0] * 20
-
-                    # Set initial target angles for the fingers
-                    for idx in range(20):
-                        if idx in base_indices:
-                            target_angles[idx] = finger_base
-                        elif idx in tip_indices:
-                            target_angles[idx] = finger_tip
-                        else:
-                            target_angles[idx] = finger_middle
-                    angles = target_angles
-                    set_hand(target_angles)
-
-                    while True:
-                        all_angles_stable = True
-                        current_angles = right_hand.get_state()[3]
-                        tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                        for i in tip_indices:
-                            if tip_torque[i] > 0.45:
-                                # Adjust angles if the torque exceeds the threshold
-                                target_angles[i] = current_angles[i]  # tip
-                                target_angles[i - 1] = current_angles[i - 1]  # middle
-                                target_angles[i - 2] = current_angles[i - 2]  # base
-
-                                # Apply torque to maintain the grip
-                                angles = target_angles
-                                set_hand(target_angles)
-                        # Short delay to allow stabilization
-                        time.sleep(0.2)
-
-                        # Check if all angles are stable
-                        all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                        if all_angles_stable:
-                            break
-
-                        # Final delay to ensure full stabilization
-                        time.sleep(0.1)'''
-
-                if key_state['cylinder_grab']: #grabbing top of the bottle
-                    # Initial target angles for each segment of the finger
-                    finger_base = 1.5
-                    finger_middle = 1.7
-                    finger_tip = 1.7
-
-                    # Indices corresponding to the base and tip joints of each finger
-                    base_indices = [1, 5, 9, 13, 17]
-                    tip_indices = [3, 7, 11, 15, 19]
-
-                    target_angles = left_starting_angles[:]
-
-                    # Set initial target angles for the fingers
-                    for idx in range(20):
-                        if idx in base_indices:
-                            target_angles[idx] = 0
-                        elif idx in tip_indices:
-                            target_angles[idx] = finger_tip
-                        else:
-                            target_angles[idx] = finger_middle
-
-                    left_hand.set_target(left_position, left_rotation, target_angles)
-
-                    while True:
-                        all_angles_stable = True
-                        current_angles = right_hand.get_state()[3]
-                        tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                        for i in tip_indices:
-                            if tip_torque[i] > 0.4:
-                                # Adjust angles if the torque exceeds the threshold
-                                target_angles[i] = current_angles[i]  # tip
-                                target_angles[i - 1] = current_angles[i - 1]  # middle
-                                target_angles[i - 2] = current_angles[i - 2]  # base
-
-                                # Apply torque to maintain the grip
-                                left_hand.set_target(left_position, left_rotation, target_angles)
-                        # Short delay to allow stabilization
-                        time.sleep(0.2)
-
-                        # Check if all angles are stable
-                        all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                        if all_angles_stable:
-                            break
-
-                        # Final delay to ensure full stabilization
-                        time.sleep(0.1) #gr
-
-                if key_state['q']:  # releasing cylinder
-                    angles = left_starting_angles
-                    left_hand.set_target(left_position, left_rotation, left_starting_angles)
-                    time.sleep(0.1)
-
+                # If the `q` key is pressed, remove the constraint
+                if key_state['q'] and left_constraint_id:
+                    pb.removeConstraint(left_constraint_id)
+                    left_constraint_id = None  # Reset the constraint ID
+                    angles = right_starting_angles
+                    left_hand.set_target(right_position, right_rotation, angles)
 
                 left_rotation = client.getQuaternionFromEuler(left_rotation)
-                left_hand.set_target(left_position, left_rotation)
+                left_hand.set_target(left_position, left_rotation, target_angles)
+                right_hand.set_target(right_position, right_rotation, prev_angles)
 
-
-            '''
-            #After here, it doesnt matter which hand, it works for both hands
-            # holding cylinder position
-            if key_state['cylinder_grab']:
-                # Initial target angles for each segment of the finger
-                finger_base = 1.5
-                finger_middle = 1.7
-                finger_tip = 1.7
-
-                # Indices corresponding to the base and tip joints of each finger
-                base_indices = [1, 5, 9, 13, 17]
-                tip_indices = [3, 7, 11, 15, 19]
-
-                target_angles = [0] * 20
-
-                # Set initial target angles for the fingers
-                for idx in range(20):
-                    if idx in base_indices:
-                        target_angles[idx] = finger_base
-                    elif idx in tip_indices:
-                        target_angles[idx] = finger_tip
-                    else:
-                        target_angles[idx] = finger_middle
-                angles = target_angles
-                set_hand(target_angles)
-
-                while True:
-                    all_angles_stable = True
-                    current_angles = right_hand.get_state()[3]
-                    tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                    for i in tip_indices:
-                        if tip_torque[i] > 0.45:
-                            # Adjust angles if the torque exceeds the threshold
-                            target_angles[i] = current_angles[i]  # tip
-                            target_angles[i - 1] = current_angles[i - 1]  # middle
-                            target_angles[i - 2] = current_angles[i - 2]  # base
-
-                            # Apply torque to maintain the grip
-                            angles = target_angles
-                            set_hand(target_angles)
-                    # Short delay to allow stabilization
-                    time.sleep(0.2)
-
-                    # Check if all angles are stable
-                    all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                    if all_angles_stable:
-                        break
-
-                    # Final delay to ensure full stabilization
-                    time.sleep(0.1)
-
-            if key_state['q']: # releasing cylinder
-                target_angles = [0.0, finger_base, finger_middle, finger_tip] * 4 + [.9, 1.5, 0, finger_tip]
-                if mode == 1 or mode == 2:
-                    target_angles[8] = 0.2
-                if mode == 2 or mode == 3:
-                    target_angles[8] = -0.2
-                angles = target_angles
-                set_hand(target_angles)
-
-            # Grabbing the lid
-            if key_state['top_grab']:
-                # Initial target angles for each segment of the finger
-                finger_base = 1.5
-                finger_middle = 1.7
-                finger_tip = 1.7
-
-                # Indices corresponding to the base and tip joints of each finger
-                base_indices = [1, 5, 9, 13, 17]
-                tip_indices = [3, 7, 11, 15, 19]
-
-                target_angles = [0] * 20
-
-                # Set initial target angles for the fingers
-                for idx in range(20):
-                    if idx in base_indices:
-                        target_angles[idx] = 0
-                    elif idx in tip_indices:
-                        target_angles[idx] = finger_tip
-                    else:
-                        target_angles[idx] = finger_middle
-
-                set_hand(target_angles)
-
-                while True:
-                    all_angles_stable = True
-                    current_angles = right_hand.get_state()[3]
-                    tip_torque = right_hand.get_state()[5]  # Assuming this stores angle changes akin to velocities
-
-                    for i in tip_indices:
-                        if tip_torque[i] > 0.45:
-                            # Adjust angles if the torque exceeds the threshold
-                            target_angles[i] = current_angles[i]  # tip
-                            target_angles[i - 1] = current_angles[i - 1]  # middle
-                            target_angles[i - 2] = current_angles[i - 2]  # base
-
-                            # Apply torque to maintain the grip
-                            set_hand(target_angles)
-                    # Short delay to allow stabilization
-                    time.sleep(0.2)
-
-                    # Check if all angles are stable
-                    all_angles_stable = all(abs(tip_torque[i]) <= 0.45 for i in tip_indices)
-
-                    if all_angles_stable:
-                        break
-
-                    # Final delay to ensure full stabilization
-                    time.sleep(0.1)
-                time.sleep(10)
-
-            #individual finger contraction
-            if key_state['f']: # moving individual fingers
-                print('individual finger mode')
-                while True:
-                    if key_state['q']:
-                        break
-                    if key_state['1']:
-                        index += step * 5
-                    elif index > 0:
-                        index -= step * 5
-                    if key_state['2']:
-                        middle += step * 5
-                    elif middle > 0:
-                        middle -= step * 5
-                    if key_state['3']:
-                        pinky += step * 5
-                    elif pinky > 0:
-                        pinky -= step * 5
-                    if key_state['4']:
-                        ring += step * 5
-                    elif ring > 0:
-                        ring -= step * 5
-                    if key_state['5']:
-                        thumb += step * 5
-                    elif thumb > 0:
-                        thumb -= step * 5
-
-
-                    angles = [0] + [index] * 3 + [0] + [middle] * 3 + [0] + [pinky] * 3 + [0] + [
-                        ring] * 3 + [0] + [thumb] * 3
-
-                    # Update the hand's target position and rotation
-                    set_hand(angles)
-                    time.sleep(0.1)'''
-
-            # Small delay to prevent updating too quickly
-            #
-            # print("position:", right_hand.get_state()[3])
-            # print("torque:", right_hand.get_state()[5])
             time.sleep(0.1)
 
 
