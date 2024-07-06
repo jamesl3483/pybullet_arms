@@ -123,7 +123,7 @@ def main(args):
 
     # Load flask and lid URDFs
     flask_position = [0, 0, 0.1]
-    lid_position = [0, 0, 0.15]  # Adjust based on the actual size of the flask and lid
+    lid_position = [0, 0, 0.2]  # Adjust based on the actual size of the flask and lid
     flask_orientation = client.getQuaternionFromEuler([0, 0, 0])
     lid_orientation = client.getQuaternionFromEuler([0, 0, 0])
 
@@ -132,6 +132,7 @@ def main(args):
     client.changeDynamics(flask_id, -1, mass=2, lateralFriction=2.0, spinningFriction=1.0,
                           localInertiaDiagonal=[0.015, 0.015, 0.015])
     list_of_objects.append(flask_id)
+    list_of_objects.append(lid_id)
 
 
     # Create a cylinder
@@ -465,8 +466,8 @@ def main(args):
 
     try:
         while client.isConnected():
-            time.sleep(2.0)
-            flask_behavior(client, flask_id, lid_id)
+            # time.sleep(2.0)
+            # flask_behavior(client, flask_id, lid_id)
 
             # Movement mode translation or rotation
             ################# MODES ####################
@@ -556,7 +557,7 @@ def main(args):
                         pivot = contact[5]  # Contact point on the object in its local frame
 
                         # Get world positions and orientations
-                        hand_world_position, hand_world_orientation = pb.getLinkState(right_hand.body_id,
+                        hand_world_position, hand_world_orientation = pb.getLinkState(left_hand.body_id,
                                                                                       link_index)[0:2]
                         object_world_position, object_world_orientation = pb.getBasePositionAndOrientation(
                             object)
@@ -582,7 +583,7 @@ def main(args):
                         )
 
                         # Create the constraint
-                        cid = create_grasp_constraint(pb, right_hand.body_id, link_index,
+                        cid = create_grasp_constraint(pb, left_hand.body_id, link_index,
                                                       object, pivotInHand, pivotInObject,
                                                       parent_frame_orientation, child_frame_orientation)
 

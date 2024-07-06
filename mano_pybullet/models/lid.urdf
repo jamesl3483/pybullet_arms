@@ -3,7 +3,7 @@
   <link name="top">
     <visual>
       <geometry>
-        <cylinder radius="0.055" length="0.02"/>
+        <cylinder radius="0.05" length="0.02"/>
       </geometry>
       <material name="red">
         <color rgba="1 0 0 1"/>
