@@ -123,7 +123,7 @@ class HandBody:
                 self._constraint_id,
                 jointChildPivot=position,
                 jointChildFrameOrientation=orientation,
-                maxForce=50.0)
+                maxForce=70.0)
         if joint_angles is not None:
             self._client.setJointMotorControlArray(
                 bodyUniqueId=self._body_id,
@@ -302,3 +302,7 @@ class HandBody:
             vertices -= self._model.joints[link_index].origin
             save_mesh_obj(temp_file.name, vertices, faces)
             yield temp_file.name
+
+    @property
+    def constraint_id(self):
+        return self._constraint_id
