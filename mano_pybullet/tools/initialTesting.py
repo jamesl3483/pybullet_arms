@@ -8,6 +8,7 @@ from pybullet_utils.bullet_client import BulletClient
 from pynput import keyboard
 import threading
 import time
+import cv2
 
 from ..hand_body import HandBody
 from ..hand_model import HandModel20, HandModel45
@@ -111,7 +112,6 @@ def main(args):
     ###### When Creating objects make sure to put them in a list of ids                            #############
     ###### This is for the grabbing mechanism which will see which objects it is most connected to #############
 
-
     list_of_objects = []
     # Cylinder parameters
     cylinder_radius = 0.04
@@ -119,22 +119,32 @@ def main(args):
     cylinder_mass = 2 # mass in kg
 
     # Set the additional search path to the directory containing the URDF file
-    pb.setAdditionalSearchPath("mano_pybullet")
+    pb.setAdditionalSearchPath("mano_pybullet/models")
 
     # Load flask and lid URDFs
     flask_position = [0, 0, 0.1]
     lid_position = [0, 0, 0.15]  # Adjust based on the actual size of the flask and lid
     flask_orientation = client.getQuaternionFromEuler([0, 0, 0])
     lid_orientation = client.getQuaternionFromEuler([0, 0, 0])
+    #
+    # flask_id = client.loadURDF("flask.urdf", flask_position, flask_orientation)
+    # lid_id = client.loadURDF("lid.urdf", lid_position, lid_orientation)
+    # client.changeDynamics(flask_id, -1, mass=2, lateralFriction=2.0, spinningFriction=1.0,
+    #                       localInertiaDiagonal=[0.015, 0.015, 0.015])
 
-    flask_id = client.loadURDF("models/flask.urdf", flask_position, flask_orientation)
-    lid_id = client.loadURDF("models/lid.urdf", lid_position, lid_orientation)
-    client.changeDynamics(flask_id, -1, mass=2, lateralFriction=2.0, spinningFriction=1.0,
-                          localInertiaDiagonal=[0.015, 0.015, 0.015])
-    list_of_objects.append(flask_id)
+    # Load box URDF
+    box_position = [0.7, 0, 0.1]  # Adjust based on the desired initial position
+    box_position2 = [-0.7, 0, 0.1]  # Adjust based on the desired initial position
+    box_orientation = pb.getQuaternionFromEuler([0, 0, 0])  # No rotation
+
+    box_id = pb.loadURDF("box.urdf", box_position, box_orientation)
+    list_of_objects.append(box_id)
+    box2_id = pb.loadURDF("box.urdf", box_position2, box_orientation)
+    list_of_objects.append(box2_id)
 
 
-    # Create a cylinder
+
+    '''# Create a cylinder
     # orientation is provided as a quaternion, here it's the identity quaternion for no rotation
     # cylinder_orientation = client.getQuaternionFromEuler([0, 0, 0])
     # cylinder_id = client.createCollisionShape(client.GEOM_CYLINDER, radius=cylinder_radius, height=cylinder_height)
@@ -151,7 +161,7 @@ def main(args):
 
     # # Adjust the dynamics of the object
     # client.changeDynamics(cylinder_body, -1, mass=cylinder_mass, lateralFriction=2.0, spinningFriction=1.0,
-    #                       localInertiaDiagonal=[0.015, 0.015, 0.015])
+    #                       localInertiaDiagonal=[0.015, 0.015, 0.015])'''
 
     # Define a function to continuously check keyboard state
     def monitor_keyboard():
@@ -281,70 +291,62 @@ def main(args):
     right_constraint_id = None
     left_constraint_id = None
 
-    def flask_behavior(client, flask_id, lid_id):
-        # Parameters for creating a revolute joint (twist_joint)
-        twist_joint_params = {
-            'parentBodyUniqueId': flask_id,
-            'parentLinkIndex': -1,  # Corrected to -1 for the base link
-            'childBodyUniqueId': lid_id,
-            'childLinkIndex': -1,  # Corrected to -1 assuming the lid is treated as a separate body
-            'jointType': pb.JOINT_REVOLUTE,
-            'jointAxis': [0, 0, 1],
-            'parentFramePosition': [0, 0, 0.11],
-            'childFramePosition': [0, 0, 0],
-            'parentFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0]),
-            'childFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0])
-        }
 
-        # Create the twist_joint using the corrected parameters
-        twist_joint_id = client.createConstraint(**twist_joint_params)
 
-        # Parameters for creating a prismatic joint (lift_joint)
-        lift_joint_params = {
-            'parentBodyUniqueId': flask_id,
-            'parentLinkIndex': 0,  # Assuming the intermediate link is the first link
-            'childBodyUniqueId': lid_id,
-            'childLinkIndex': 0,  # Assuming the lid is the second link
-            'jointType': pb.JOINT_PRISMATIC,
-            'jointAxis': [0, 0, 1],
-            'parentFramePosition': [0, 0, 0.02],
-            'childFramePosition': [0, 0, 0],
-            'parentFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0]),
-            'childFrameOrientation': pb.getQuaternionFromEuler([0, 0, 0]),
-            'maxForce': 0.1,
-            'maxVelocity': 0.1
-        }
+    def create_flask_and_lid(client):
+        # Load flask and lid URDFs, assuming they are already defined with appropriate collision and visual shapes
+        flask_id = client.loadURDF("flask.urdf", [0, 0, 0.1])
+        lid_id = client.loadURDF("lid.urdf", [0, 0, 0.15])
 
-        # Create the lift_joint
-        lift_joint_id = client.createConstraint(**lift_joint_params)
+        if flask_id is None or lid_id is None:
+            print("Invalid object ID provided.")
+            return None
 
-        twist_joint_index = 0  # Assuming the first joint is the twist_joint
-        lift_joint_index = 1  # Assuming the second joint is the lift_joint
-        separation_height = 0.05  # Height at which the lid separates from the flask
+        revolute_joint_id = client.createConstraint(parentBodyUniqueId=flask_id,
+                parentLinkIndex=-1,
+                childBodyUniqueId=lid_id,
+                childLinkIndex=-1,
+                jointType=pb.JOINT_FIXED,
+                jointAxis=[0.0, 0.0, 1.0], #not used for fixed joint
+                parentFramePosition=[0.0, 0.0, 0.1],
+                childFramePosition=[0.0, 0.0, -0.01])
 
-        # Get the current angle of the twist_joint
-        twist_joint_state = client.getJointState(flask_id, twist_joint_index)
-        twist_joint_angle = twist_joint_state[0]  # Get the current joint angle
+        return flask_id, lid_id, revolute_joint_id
 
-        # Assuming the twist_joint_angle needs to be scaled to fit the lift_joint's range
-        # This scaling factor should be adjusted based on your specific requirements
-        scaling_factor = 0.01
-        lift_joint_target_position = twist_joint_angle * scaling_factor
+    def adjust_lid_height_based_on_revolute_angle(client, flask_id, lid_id, revolute_joint_id,
+                                                  angle_to_height_ratio):
+        # Get the current angle of the revolute joint
+        _, revolute_joint_angle, _, _, _, _ = pb.getJointState(flask_id, revolute_joint_id)
 
-        # Ensure the target position is within the allowed range of the lift_joint
-        lift_joint_target_position = max(0, min(lift_joint_target_position, 0.06))
+        # Calculate the new height of the lid based on the revolute joint's angle
+        new_height = revolute_joint_angle * angle_to_height_ratio
 
-        # Set the target position of the lift_joint based on the twist_joint_angle
-        client.setJointMotorControl2(flask_id, lift_joint_index, client.POSITION_CONTROL,
-                                     targetPosition=lift_joint_target_position)
-        # Check the position of the lift_joint
-        _, lift_joint_position, _, _ = pb.getJointState(flask_id,
-                                                        jointIndex=1)  # Assuming jointIndex=1 is the lift_joint
+        # Adjust the lid's position based on the calculated height
+        # Note: This is a simplification. In a real scenario, you might need to consider the lid's original position and orientation.
+        client.resetBasePositionAndOrientation(lid_id, [0, 0, new_height], [0, 0, 0, 1])
 
-        if lift_joint_position >= separation_height:
-            client.removeConstraint(lift_joint_id)
-            client.removeConstraint(twist_joint_id)
-            print("Lid separated from the flask.")
+    def check_and_break_constraint(client, constraint_id, force_threshold):
+        # Get the constraint force
+        if constraint_id is not None:
+            constraint_info = client.getConstraintState(constraint_id) #constraint_info[0:3] give the forces on the joints
+            applied_force = constraint_info[0:3]  # This index may vary depending on the PyBullet version
+            if sum(applied_force) > force_threshold:
+                client.removeConstraint(constraint_id)
+                print("Constraint broken!")
+                return None
+        return constraint_id
+
+    def check_finger_angles(current_angles, finger_base, finger_middle, finger_tip, base_indices, middle_indices,
+                            tip_indices):
+        # Check if base angles match
+        base_match = all(abs(current_angles[idx] - finger_base) < 0.005 for idx in base_indices)
+        # Check if middle angles match
+        middle_match = all(abs(current_angles[idx] - finger_middle) < 0.005 for idx in middle_indices)
+        # Check if tip angles match
+        tip_match = all(abs(current_angles[idx] - finger_tip) < 0.005 for idx in tip_indices)
+
+        return base_match and middle_match and tip_match
+
     # Create a constraint between the hand and the object
     def create_grasp_constraint(client, hand_id, hand_link, object_id, pivotInHand, pivotInObject, ornHand,
                                 ornObject):
@@ -406,10 +408,14 @@ def main(args):
 
             hand.set_target(position, rotation, target_angles)
 
-            time.sleep(0.2)  # Adjust delay as necessary
+            time.sleep(0.1)  # Adjust delay as necessary
 
             # Check if angles are stable and contact is made
             current_angles = hand.get_state()[3]
+            if check_finger_angles(current_angles, finger_base, finger_middle, finger_tip, base_indices, middle_indices,
+                                   tip_indices):
+                print("Target finger positions reached. Adjusting simulation behavior accordingly.")
+                break;
             tip_torque = hand.get_state()[5]
             contact_made = False
 
@@ -431,6 +437,9 @@ def main(args):
 
                 hand.set_target(position, rotation, target_angles)
                 break
+
+
+
 
             time.sleep(0.1)  # Small delay to prevent rapid updates
         return target_angles
@@ -462,12 +471,73 @@ def main(args):
             rotation_euler[0] -= ROTATION_INCREMENT  # Pitch down
         return client.getQuaternionFromEuler(rotation_euler)
 
+    def cameras():
+        def capture_image(camera_position, target_position, up_vector, fov, aspect, near, far):
+            view_matrix = pb.computeViewMatrix(camera_position, target_position, up_vector)
+            projection_matrix = pb.computeProjectionMatrixFOV(fov, aspect, near, far)
+            width, height, rgbImg, depthImg, segImg = pb.getCameraImage(width=640, height=480,
+                                                                        viewMatrix=view_matrix,
+                                                                        projectionMatrix=projection_matrix)
+
+            # Convert RGB image for OpenCV
+            rgbImg = np.reshape(rgbImg, (height, width, 4))
+
+            # Convert depth image to 8-bit for visualization
+            depthImg = np.array(depthImg)
+            depthImg = cv2.normalize(depthImg, None, 0, 255, cv2.NORM_MINMAX)
+            depthImg = np.uint8(depthImg)
+
+            # Apply color map to segmentation mask for visualization
+            segImg = np.array(segImg)
+            segImgColor = cv2.applyColorMap(np.uint8(segImg), cv2.COLORMAP_JET)
+
+            return rgbImg, depthImg, segImgColor
+
+        # Define camera parameters
+        camera_positions = [
+            [1, 1, 1],
+            [-1, -1, 1]
+        ]
+        target_positions = [
+            [0, 0, 0],
+            [0, 0, 0]
+        ]
+        up_vectors = [
+            [0, 0, 1],
+            [0, 0, 1]
+        ]
+        fov = 60
+        aspect = 640 / 480
+        near = 0.1
+        far = 100
+
+        while True:
+            rgbImg, depthImg, segImgColor = capture_image(camera_positions[0], target_positions[0], up_vectors[0], fov,
+                                                  aspect, near, far)
+            rgbImg1, depthImg1, segImgColor1 = capture_image(camera_positions[1], target_positions[1], up_vectors[1], fov,
+                                                     aspect, near, far)
+            cv2.imshow('Camera 1', rgbImg)
+            cv2.imshow('Depth Image 2', depthImg1)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+
+
+    flask_id, lid_id, revolute_joint_id = create_flask_and_lid(client)
+    #add to the list of objects in the scene
+    list_of_objects.append(flask_id)
+    list_of_objects.append(lid_id)
+
+    video_thread = threading.Thread(target=cameras)
+    video_thread.start()
 
     try:
         while client.isConnected():
-            time.sleep(2.0)
-            flask_behavior(client, flask_id, lid_id)
 
+
+
+
+            revolute_joint_id = check_and_break_constraint(client, revolute_joint_id, 100)
             # Movement mode translation or rotation
             ################# MODES ####################
             # 0 = right_translation, 1 = right_grab and 2 degree rotation
@@ -479,79 +549,24 @@ def main(args):
             ########################################
 
             if mode == 0: #right_translation
-                print("mode 0")
+                print("right translation")
                 is_right = True
                 right_position = translate_hand(right_position)
+                right_hand.set_target(right_position, right_rotation, right_angles)
 
             if mode == 1: # right_grabbing and rotation
-                print("mode 1")
+                print("right grab and rotation")
                 right_rotation = rotate_hand(right_rotation)
 
                 if key_state['cylinder_grab']:
-                        # Check if we have contact and create a constraint
-                        object, contacts = check_contact(pb, right_hand.body_id, list_of_objects)
-                        if contacts:
-                            contact = contacts[0]
-                            link_index = contact[3]  # Get link index from the contact point
-                            pivotHand = contact[6]  # Contact point on the hand in its local frame
-                            pivot = contact[5]  # Contact point on the object in its local frame
+                    right_angles = curl_fingers_until_contact(right_hand, right_position, right_rotation, right_angles,
+                                                              is_right)
 
-                            # Get world positions and orientations
-                            hand_world_position, hand_world_orientation = pb.getLinkState(right_hand.body_id,
-                                                                                          link_index)[0:2]
-                            object_world_position, object_world_orientation = pb.getBasePositionAndOrientation(
-                                object)
-
-                            # Convert world coordinates to local coordinates for the hand
-                            parent_frame_position, parent_frame_orientation = pb.invertTransform(hand_world_position,
-                                                                                                 hand_world_orientation)
-                            pivotInHand, _ = pb.multiplyTransforms(
-                                parent_frame_position,
-                                parent_frame_orientation,
-                                pivot,
-                                [0, 0, 0, 1]
-                            )
-
-                            # Convert world coordinates to local coordinates for the object
-                            child_frame_position, child_frame_orientation = pb.invertTransform(object_world_position,
-                                                                                               object_world_orientation)
-                            pivotInObject, _ = pb.multiplyTransforms(
-                                child_frame_position,
-                                child_frame_orientation,
-                                pivot,
-                                [0, 0, 0, 1]
-                            )
-
-                            # Create the constraint
-                            cid = create_grasp_constraint(pb, right_hand.body_id, link_index,
-                                                          object, pivotInHand, pivotInObject,
-                                                          parent_frame_orientation, child_frame_orientation)
-
-                            print(f"Constraint created at link index {link_index}")
-                            right_constraint_id = cid  # Store the constraint ID for future operations
-                        right_angles = curl_fingers_until_contact( right_hand, right_position, right_rotation, right_angles, is_right)
-
-                # If the `q` key is pressed, remove the constraint
-                if key_state['q'] and right_constraint_id:
-                    pb.removeConstraint(right_constraint_id)
-                    right_constraint_id = None  # Reset the constraint ID
-                    right_angles = right_starting_angles[:]
-
-            if mode == 2: #left_translation
-                print("mode 2")
-                is_right = False
-                left_position = translate_hand(left_position)
-
-            if mode == 3:
-                print("mode 3")
-                left_rotation = rotate_hand(left_rotation)
-
-                if key_state['cylinder_grab']:
                     # Check if we have contact and create a constraint
-                    object, contacts = check_contact(pb, left_hand.body_id, list_of_objects)
+                    object, contacts = check_contact(pb, right_hand.body_id, list_of_objects)
                     if contacts:
                         contact = contacts[0]
-                        link_index = contact[3]  # Get link index from the contact point
+                        link_index = 0  # Get link index from the base of the hand
                         pivotHand = contact[6]  # Contact point on the hand in its local frame
                         pivot = contact[5]  # Contact point on the object in its local frame
 
@@ -587,22 +602,88 @@ def main(args):
                                                       parent_frame_orientation, child_frame_orientation)
 
                         print(f"Constraint created at link index {link_index}")
-                        left_constraint_id = cid  # Store the constraint ID for future operations
-                    left_angles = curl_fingers_until_contact(left_hand, left_position, left_rotation, left_angles, is_right)
+                        right_constraint_id = cid  # Store the constraint ID for future operations
+                    else:
+                        print("Nothing in contact, will not curl fingers")
 
                 # If the `q` key is pressed, remove the constraint
-                if key_state['q'] and left_constraint_id:
+                if key_state['q']:
+                    if right_constraint_id is not None:
+                        pb.removeConstraint(right_constraint_id)
+                    right_constraint_id = None  # Reset the constraint ID
+                    right_angles = right_starting_angles[:]
+                right_hand.set_target(right_position, right_rotation, right_angles)
+
+            if mode == 2: #left_translation
+                print("left translation")
+                is_right = False
+                left_new_position = translate_hand(left_position)
+                current_state = left_hand.get_state()[:3]
+
+                # if abs(left_new_position - list(current_state)) > 0.009:
+                left_hand.set_target(left_position, left_rotation, left_angles)
+
+            if mode == 3:
+                print("left grab and rotation")
+                left_rotation = rotate_hand(left_rotation)
+
+                if key_state['cylinder_grab']:
+                    left_angles = curl_fingers_until_contact(left_hand, left_position, left_rotation, left_angles, is_right)
+
+                    # Check if we have contact and create a constraint
+                    object, contacts = check_contact(pb, left_hand.body_id, list_of_objects)
+                    if contacts:
+                        contact = contacts[0]
+                        link_index = 0 # Get link index from the base of the hand
+                        pivotHand = contact[6]  # Contact point on the hand in its local frame
+                        pivot = contact[5]  # Contact point on the object in its local frame
+
+                        # Get world positions and orientations
+                        hand_world_position, hand_world_orientation = pb.getLinkState(left_hand.body_id,
+                                                                                      link_index)[0:2]
+                        object_world_position, object_world_orientation = pb.getBasePositionAndOrientation(
+                            object)
+
+                        # Convert world coordinates to local coordinates for the hand
+                        parent_frame_position, parent_frame_orientation = pb.invertTransform(hand_world_position,
+                                                                                             hand_world_orientation)
+                        pivotInHand, _ = pb.multiplyTransforms(
+                            parent_frame_position,
+                            parent_frame_orientation,
+                            pivot,
+                            [0, 0, 0, 1]
+                        )
+
+                        # Convert world coordinates to local coordinates for the object
+                        child_frame_position, child_frame_orientation = pb.invertTransform(object_world_position,
+                                                                                           object_world_orientation)
+                        pivotInObject, _ = pb.multiplyTransforms(
+                            child_frame_position,
+                            child_frame_orientation,
+                            pivot,
+                            [0, 0, 0, 1]
+                        )
+
+                        # Create the constraint
+                        cid = create_grasp_constraint(pb, left_hand.body_id, link_index,
+                                                      object, pivotInHand, pivotInObject,
+                                                      parent_frame_orientation, child_frame_orientation)
+
+                        print(f"Constraint created at link index {link_index}")
+                        left_constraint_id = cid  # Store the constraint ID for future operations
+
+
+                # If the `q` key is pressed, remove the constraint
+                if key_state['q']:
                     pb.removeConstraint(left_constraint_id)
                     print(f"Constraint destroyed at link index {link_index}")
                     left_constraint_id = None  # Reset the constraint ID
                     left_angles = left_starting_angles[:]
+                left_hand.set_target(left_position, left_rotation, left_angles)
 
-            left_hand.set_target(left_position, left_rotation, left_angles)
-            right_hand.set_target(right_position, right_rotation, right_angles)
+
+
             time.sleep(0.1)
-
-
-
 
 
     except pb.error as err:
