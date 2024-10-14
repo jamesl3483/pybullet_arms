@@ -52,7 +52,9 @@ The package also provides several [OpenAI gym](https://gym.openai.com/) environm
 ![HandPushEnv](https://github.com/ikalevatykh/mano_pybullet/blob/main/media/push_teddy.gif?raw=true "HandPushEnv")
 
 ## Keyboard control (7DOF)
+```
 python -m mano_pybullet.tools.initialTesting
+```
 
 Due to the purposes of my usage degrees of freedom has been limited which has taken away a degree of rotation
 Email me if you want to use this. This fork of the main publisher in not well documented.
